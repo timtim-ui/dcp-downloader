@@ -333,10 +333,10 @@
       <div id="folderInfoDiv"></div>
       <div id="filePreviewDiv"></div>
 
-      <!-- Client name input -->
+      <!-- Report email input -->
       <div style="margin-bottom:15px">
-        <label for="clientNameInput">Your Name / Company (for download records)</label>
-        <input type="text" id="clientNameInput" placeholder="e.g. ABC Cinema">
+        <label for="reportEmailInput">Report Email (optional)</label>
+        <input type="email" id="reportEmailInput" placeholder="name@yourcompany.com">
       </div>
 
       <!-- Destination folder picker -->
@@ -463,6 +463,10 @@ function canUseFolderPicker() {
   return ('showDirectoryPicker' in window) && (window.top === window.self);
 }
 
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || '').trim());
+}
+
 function callJsonp(action, params = {}) {
   return new Promise((resolve, reject) => {
     if (!isApiUrlConfigured()) {
@@ -523,6 +527,30 @@ function callBackend(fn, ...args) {
   }
 
   return Promise.reject(new Error('Unsupported backend function: ' + fn));
+}
+
+async function sendReportEmail(payload) {
+  if (isGASBridgeAvailable()) {
+    return callBackend('sendCheckReportEmail', payload);
+  }
+
+  if (!isApiUrlConfigured()) {
+    throw new Error('GAS API URL is not configured.');
+  }
+
+  const form = new URLSearchParams();
+  form.set('action', 'sendCheckReportEmail');
+  form.set('payload', JSON.stringify(payload));
+
+  // no-cors: request is sent, but browser won't expose response body.
+  // This is fine for fire-and-forget report emails.
+  await fetch(GAS_API_URL, {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+    body: form.toString(),
+    keepalive: true
+  });
 }
 
 // ============================================================
@@ -890,6 +918,32 @@ async function runVerify() {
   $('centralStatusIcon').innerHTML = '';
   $('assetListBody').innerHTML = '';
   overallStatus = 'OK';
+  const reportEmail = ($('reportEmailInput').value || '').trim();
+  const reportRows = [];
+
+  async function finishVerifyAndSendReport() {
+    finalizeCheck();
+    if (!reportEmail) return;
+    if (!isValidEmail(reportEmail)) {
+      addLogMessage('error', 'Report email format is invalid. Skip sending.');
+      return;
+    }
+
+    const payload = {
+      reportEmail,
+      folderName,
+      overallStatus,
+      checkedAt: new Date().toISOString(),
+      rows: reportRows
+    };
+
+    try {
+      await sendReportEmail(payload);
+      setStatus('Check completed! Overall Status: ' + overallStatus + '. Report email queued to ' + reportEmail + '.', overallStatus === 'OK' ? 'success' : 'error');
+    } catch (e) {
+      addLogMessage('error', 'Failed to submit report email request: ' + e.message);
+    }
+  }
 
   setStatus('Building local file map...');
 
@@ -913,11 +967,13 @@ async function runVerify() {
 
   if (!assetmapFile) {
     addLogMessage('error', 'Missing ASSETMAP (or ASSETMAP.xml) in DCP folder.');
-    finalizeCheck(); return;
+    reportRows.push({ assetName: 'ASSETMAP', status: 'Missing', message: 'Missing ASSETMAP (or ASSETMAP.xml) in DCP folder.' });
+    await finishVerifyAndSendReport(); return;
   }
   if (!pklFile) {
     addLogMessage('error', 'Could not find a valid PKL XML file in DCP folder.');
-    finalizeCheck(); return;
+    reportRows.push({ assetName: 'PKL', status: 'Missing', message: 'Could not find a valid PKL XML file in DCP folder.' });
+    await finishVerifyAndSendReport(); return;
   }
 
   addLogMessage('ok', 'Found ASSETMAP: ' + assetmapFile.name);
@@ -930,7 +986,8 @@ async function runVerify() {
     ]);
   } catch (e) {
     addLogMessage('error', 'Error reading XML files: ' + e.message);
-    finalizeCheck(); return;
+    reportRows.push({ assetName: 'XML', status: 'Bad', message: 'Error reading XML files: ' + e.message });
+    await finishVerifyAndSendReport(); return;
   }
 
   setStatus('Parsing PKL and ASSETMAP locally...');
@@ -939,13 +996,14 @@ async function runVerify() {
     assetList = buildAssetListFromXml(assetMapText, pklText);
   } catch (e) {
     addLogMessage('error', 'XML parse error: ' + e.message);
-    finalizeCheck();
-    return;
+    reportRows.push({ assetName: 'XML', status: 'Bad', message: 'XML parse error: ' + e.message });
+    await finishVerifyAndSendReport(); return;
   }
 
   if (!assetList || assetList.length === 0) {
     addLogMessage('error', 'No valid assets were found in PKL/ASSETMAP.');
-    finalizeCheck(); return;
+    reportRows.push({ assetName: 'Manifest', status: 'Bad', message: 'No valid assets were found in PKL/ASSETMAP.' });
+    await finishVerifyAndSendReport(); return;
   }
 
   const total = assetList.length;
@@ -981,6 +1039,7 @@ async function runVerify() {
 
     if (!asset.path) {
       updateAssetStatus(asset.uuid, 'Missing', 'Path missing in ASSETMAP');
+      reportRows.push({ assetName, status: 'Missing', message: 'Path missing in ASSETMAP' });
       continue;
     }
 
@@ -990,6 +1049,7 @@ async function runVerify() {
 
     if (!assetFile) {
       updateAssetStatus(asset.uuid, 'Missing', 'File not found locally');
+      reportRows.push({ assetName, status: 'Missing', message: 'File not found locally' });
       continue;
     }
 
@@ -1002,19 +1062,22 @@ async function runVerify() {
 
       if (sizeMatches && hashMatches) {
         updateAssetStatus(asset.uuid, 'Good', 'OK');
+        reportRows.push({ assetName, status: 'Good', message: 'GOOD' });
       } else {
         const why = !sizeMatches ? 'Size mismatch' : 'Hash mismatch';
         updateAssetStatus(asset.uuid, 'Bad', why);
+        reportRows.push({ assetName, status: 'Bad', message: why });
       }
     } catch (e) {
       addLogMessage('error', 'Hash error for ' + assetName + ': ' + e.message);
       updateAssetStatus(asset.uuid, 'Bad', 'Hash error');
+      reportRows.push({ assetName, status: 'Bad', message: 'Hash error: ' + e.message });
     }
   }
 
   $('verifyProgressContainer').style.display = 'none';
   setStatus('All hashes calculated. Finalizing...');
-  finalizeCheck();
+  await finishVerifyAndSendReport();
 }
 
 function buildAssetListFromXml(assetMapText, pklText) {
@@ -1156,7 +1219,7 @@ $('downloadAnotherBtn').addEventListener('click', () => {
   overallStatus = 'OK';
 
   $('driveUrlInput').value         = '';
-  $('clientNameInput').value       = '';
+  $('reportEmailInput').value      = '';
   $('destPathDisplay').textContent = 'No folder selected.';
   $('startDownloadBtn').disabled   = true;
   $('rescanBtn').disabled          = false;

@@ -425,7 +425,7 @@ const $  = id => document.getElementById(id);
 const fmtBytes = b => b >= 1e9 ? (b/1e9).toFixed(2)+' GB' : b >= 1e6 ? (b/1e6).toFixed(1)+' MB' : b >= 1e3 ? (b/1e3).toFixed(0)+' KB' : b+' B';
 const fmtSpeed = s => s >= 1e6 ? (s/1e6).toFixed(1)+' MB/s' : (s/1e3).toFixed(0)+' KB/s';
 const sleep    = ms => new Promise(r => setTimeout(r, ms));
-const GAS_API_URL_DEFAULT = 'REPLACE_WITH_YOUR_GAS_WEB_APP_EXEC_URL';
+const GAS_API_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbyd2_QrZZBmXcFHTUMuKODN3locg7CVZraaM8s-_z2HP8sIfePkhQ7e_Z2HRmnd0_4B/exec';
 const GAS_API_URL = new URLSearchParams(window.location.search).get('gasApi') || GAS_API_URL_DEFAULT;
 
 function setStatus(msg, type = '') {

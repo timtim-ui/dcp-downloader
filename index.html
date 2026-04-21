@@ -1,0 +1,1171 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Full Shine DCP Downloader</title>
+  <script src="https://cdn.jsdelivr.net/npm/js-sha1@0.6.0/build/sha1.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css?family=Montserrat:400,700,800&display=swap');
+
+    :root {
+      --color-primary:       #EA4C89;
+      --color-primary-light: #F082AC;
+      --color-white:         #FFFFFF;
+      --color-text-dark:     #333333;
+      --color-text-light:    #555555;
+      --color-grey-bg:       #f6f5f7;
+      --color-grey-border:   #eee;
+      --color-success:       #2ECC71;
+      --color-error:         #FF0000;
+      --color-warning:       #E67E22;
+      --color-running:       #1ABC9C;
+      --color-pending:       #8E44AD;
+      --font-main: 'Montserrat', 'Helvetica Neue', Arial, sans-serif;
+      --font-mono: 'SFMono-Regular', Consolas, 'Menlo', 'Courier New', monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: var(--font-main);
+      margin: 0;
+      padding: 20px 20px 60px;
+      background: var(--color-grey-bg);
+      color: var(--color-text-dark);
+      font-weight: 500;
+    }
+
+    /* ========== Container & Header ========== */
+    .container {
+      background: var(--color-white);
+      border-radius: 10px;
+      box-shadow: 0 14px 28px rgba(0,0,0,.2), 0 10px 10px rgba(0,0,0,.18);
+      max-width: 860px;
+      margin: auto;
+      overflow: hidden;
+    }
+    .header-panel {
+      background: linear-gradient(to right, var(--color-primary-light), var(--color-primary));
+      color: var(--color-white);
+      padding: 25px 20px 20px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    .logo-container { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+    .logo-text { font-size: 28px; font-weight: 800; letter-spacing: 2px; }
+    .logo-filmstrip {
+      display: flex; flex-direction: row;
+      width: 220px; height: 20px;
+      border-top: 2px solid white; border-bottom: 2px solid white;
+      align-items: center; justify-content: space-between; padding: 0 5px;
+    }
+    .filmstrip-hole { width: 4px; height: 8px; background: white; }
+
+    .content-wrapper { padding: 25px; }
+
+    h1 {
+      text-align: center; font-size: 2.2em; font-weight: 800;
+      text-transform: uppercase; margin: 0 0 20px;
+    }
+
+    /* ========== Step Bar ========== */
+    .step-bar {
+      display: flex; align-items: center; justify-content: center;
+      gap: 4px; margin-bottom: 22px;
+    }
+    .step-item {
+      padding: 7px 18px; border-radius: 20px;
+      font-size: 0.82em; font-weight: 700;
+      color: #aaa; background: var(--color-grey-bg);
+      transition: all .3s;
+    }
+    .step-item.active { color: white; background: var(--color-primary); }
+    .step-item.done   { color: var(--color-success); background: #efffef; }
+    .step-arrow { color: #ccc; font-size: 1.1em; padding: 0 2px; }
+
+    /* ========== Status Bar ========== */
+    #statusBar {
+      padding: 12px 15px; border-radius: 8px; font-weight: 600;
+      margin-bottom: 18px; border: 1px solid var(--color-grey-border);
+      background: white; font-size: .95em;
+    }
+    #statusBar.error   { background: #fff0f0; border-color: var(--color-error);   color: #cc0000; }
+    #statusBar.success { background: #f0fff0; border-color: var(--color-success); color: #008800; }
+    #statusBar.warning { background: #fffaf0; border-color: var(--color-warning); color: #996600; }
+
+    /* ========== Sections ========== */
+    .section {
+      margin-bottom: 20px; padding: 20px;
+      border: 1px solid var(--color-grey-border);
+      border-radius: 8px; background: #fafafa;
+    }
+    label {
+      display: block; font-weight: 700; margin-bottom: 10px; font-size: 1em;
+    }
+    input[type="text"], input[type="url"] {
+      width: 100%; padding: 12px 15px;
+      border: 2px solid var(--color-grey-border); border-radius: 8px;
+      font-family: var(--font-mono); font-size: .88em;
+      transition: border-color .2s; margin-bottom: 12px; background: white;
+    }
+    input[type="text"]:focus, input[type="url"]:focus {
+      outline: none; border-color: var(--color-primary-light);
+    }
+
+    button {
+      border-radius: 25px; border: none;
+      background: var(--color-primary); color: white;
+      font-size: 1em; font-weight: 700; padding: 13px 20px;
+      cursor: pointer; width: 100%; text-transform: uppercase;
+      letter-spacing: 1px; transition: all .3s; font-family: var(--font-main);
+    }
+    button:hover:not(:disabled) { background: #D4417B; transform: translateY(-1px); }
+    button:active:not(:disabled) { transform: translateY(0); }
+    button:disabled { background: #ccc; color: #888; cursor: not-allowed; }
+    button.secondary {
+      background: white; color: var(--color-primary);
+      border: 2px solid var(--color-primary);
+    }
+    button.secondary:hover:not(:disabled) { background: var(--color-grey-bg); transform: translateY(-1px); }
+
+    /* ========== Browser Warning ========== */
+    #browserWarning {
+      background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px;
+      padding: 12px 15px; margin-bottom: 18px; font-size: .9em; color: #856404;
+    }
+
+    /* ========== Scan: File List Preview ========== */
+    .folder-info {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 15px; background: white;
+      border: 1px solid var(--color-grey-border); border-radius: 8px; margin-bottom: 12px;
+    }
+    .folder-icon { font-size: 1.8em; }
+    .folder-name { font-weight: 700; font-size: .95em; margin-bottom: 3px; }
+    .folder-meta { font-size: .82em; color: var(--color-text-light); }
+
+    .file-preview-scroll {
+      max-height: 180px; overflow-y: auto;
+      border: 1px solid var(--color-grey-border); border-radius: 8px;
+      margin-bottom: 12px;
+    }
+    .file-preview-table { width: 100%; border-collapse: collapse; font-size: .82em; font-family: var(--font-mono); }
+    .file-preview-table tr { border-bottom: 1px solid var(--color-grey-border); }
+    .file-preview-table tr:last-child { border-bottom: none; }
+    .file-preview-table td { padding: 7px 12px; }
+    .file-preview-table td:last-child { text-align: right; color: var(--color-text-light); white-space: nowrap; }
+
+    /* ========== Download Section ========== */
+    .dest-row { display: flex; align-items: center; gap: 10px; margin-bottom: 15px; }
+    .dest-row button { width: auto; padding: 10px 18px; font-size: .88em; }
+    .dest-path {
+      flex: 1; font-family: var(--font-mono); font-size: .82em;
+      color: var(--color-text-light); padding: 10px 12px;
+      background: white; border: 1px solid var(--color-grey-border);
+      border-radius: 8px; word-break: break-all;
+    }
+    .btn-row { display: flex; gap: 10px; }
+    .btn-row button { flex: 1; }
+
+    /* ========== Overall Progress ========== */
+    .progress-block { margin-bottom: 18px; }
+    .progress-label {
+      display: flex; justify-content: space-between;
+      font-size: .88em; margin-bottom: 6px; font-weight: 600;
+    }
+    .progress-bar-bg {
+      width: 100%; height: 26px; background: var(--color-grey-bg);
+      border-radius: 13px; overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%; background: var(--color-primary); border-radius: 13px;
+      transition: width .3s ease;
+      display: flex; align-items: center; justify-content: center;
+      color: white; font-weight: 700; font-size: .85em; min-width: 2px;
+    }
+    .progress-bar-fill.done { background: var(--color-success); }
+
+    /* ========== Per-File Status List ========== */
+    .file-list-container { margin-top: 15px; }
+    .file-row {
+      display: grid;
+      grid-template-columns: 24px 1fr 80px 80px;
+      align-items: center; gap: 8px;
+      padding: 9px 4px;
+      border-bottom: 1px solid var(--color-grey-border);
+      font-size: .84em;
+    }
+    .file-row:last-child { border-bottom: none; }
+    .file-row-icon { text-align: center; font-size: 1.1em; }
+    .file-row-name { font-family: var(--font-mono); word-break: break-all; }
+    .file-row-name small { display: block; color: var(--color-text-light); font-size: .88em; margin-top: 2px; }
+    .file-row-size { text-align: right; color: var(--color-text-light); white-space: nowrap; }
+    .file-row-mini { }
+    .mini-bar-bg { width: 100%; height: 6px; background: var(--color-grey-bg); border-radius: 3px; overflow: hidden; }
+    .mini-bar-fill { height: 100%; width: 0%; background: var(--color-primary); border-radius: 3px; transition: width .3s; }
+    .mini-bar-fill.done { background: var(--color-success); }
+    .icon-queued     { color: #bbb; }
+    .icon-running    { color: var(--color-running); }
+    .icon-done       { color: var(--color-success); }
+    .icon-error      { color: var(--color-error); }
+    .icon-skipped    { color: var(--color-success); }
+
+    /* ========== Verify Section (same as FSDcheck) ========== */
+    #centralStatusIcon {
+      text-align: center; font-size: 100px; line-height: 1;
+      margin: 20px 0 15px;
+    }
+    .central-icon-ok      { color: var(--color-success); }
+    .central-icon-error   { color: var(--color-error); }
+    .central-icon-warning { color: var(--color-warning); }
+
+    #preCheckLog { }
+    #preCheckLog .result-item {
+      margin-bottom: 10px; padding: 14px; border-radius: 8px;
+      display: flex; align-items: flex-start; font-family: var(--font-mono);
+      font-weight: 600; border-width: 2px; border-style: solid;
+    }
+    #preCheckLog .result-item.error {
+      background: #fff0f0; color: #CC0000; border-color: var(--color-error);
+    }
+    #preCheckLog .result-icon { margin-right: 12px; font-size: 1.2em; }
+
+    #resultsTable {
+      width: 100%; border-collapse: collapse; margin-top: 15px;
+      border: 1px solid var(--color-grey-border); border-radius: 8px;
+      overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,.05);
+    }
+    #resultsTable th, #resultsTable td {
+      border: none; border-bottom: 1px solid var(--color-grey-border);
+      padding: 13px 14px; text-align: left; vertical-align: top;
+    }
+    #resultsTable tr:last-child td { border-bottom: none; }
+    #resultsTable th {
+      background: var(--color-primary); color: white;
+      font-weight: 700; font-size: 1em;
+    }
+    #resultsTable td:nth-child(1) { width: 50px; text-align: center; font-weight: 700; }
+    #resultsTable td:nth-child(3) { width: 80px; text-align: center; vertical-align: middle; }
+    #resultsTable td:nth-child(2) { word-break: break-all; }
+    .asset-details { font-size: .88em; color: var(--color-text-light); margin-top: 6px; font-family: var(--font-mono); }
+
+    @keyframes breathing { 0%,100%{opacity:1} 50%{opacity:.6} }
+    .asset-status-badge {
+      display: inline-block; padding: 3px 9px; border-radius: 5px;
+      font-weight: 700; font-size: .85em; color: white; text-transform: uppercase;
+    }
+    .status-running   { background: var(--color-running); animation: breathing 1.5s ease-in-out infinite; }
+    .status-processed { background: var(--color-success); }
+    .status-queued    { background: var(--color-pending); }
+
+    .status-icon-ok      { color: var(--color-success); font-size: 1.8em; font-weight: bold; }
+    .status-icon-error   { color: var(--color-error);   font-size: 1.8em; font-weight: bold; }
+    .status-icon-missing { color: var(--color-warning); font-size: 1.8em; font-weight: bold; }
+    .details-bad     { color: var(--color-error);   font-weight: bold; }
+    .details-missing { color: var(--color-warning); font-weight: bold; }
+
+    /* ========== Verify Progress ========== */
+    #verifyProgressContainer { display: none; margin-bottom: 20px; }
+
+    /* ========== Footer ========== */
+    footer {
+      text-align: center; margin-top: 22px; padding: 10px;
+      font-family: var(--font-mono); color: var(--color-text-light); font-size: .88em;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container" id="mainContainer">
+
+  <!-- Header -->
+  <div class="header-panel">
+    <div class="logo-container">
+      <div class="logo-text">FULL SHINE</div>
+      <div class="logo-filmstrip">
+        <div class="filmstrip-hole"></div><div class="filmstrip-hole"></div>
+        <div class="filmstrip-hole"></div><div class="filmstrip-hole"></div>
+        <div class="filmstrip-hole"></div><div class="filmstrip-hole"></div>
+        <div class="filmstrip-hole"></div><div class="filmstrip-hole"></div>
+        <div class="filmstrip-hole"></div><div class="filmstrip-hole"></div>
+        <div class="filmstrip-hole"></div><div class="filmstrip-hole"></div>
+        <div class="filmstrip-hole"></div><div class="filmstrip-hole"></div>
+        <div class="filmstrip-hole"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="content-wrapper">
+    <h1>DCP Downloader</h1>
+
+    <!-- Browser Warning -->
+    <div id="browserWarning" style="display:none">
+      Your browser does not support File System Access API.<br>
+      Please use <strong>Chrome</strong> or <strong>Edge 86+</strong> for full functionality.
+    </div>
+
+    <!-- Step Bar -->
+    <div class="step-bar">
+      <div class="step-item active" id="si1">1 SCAN</div>
+      <div class="step-arrow">&rsaquo;</div>
+      <div class="step-item" id="si2">2 DOWNLOAD</div>
+      <div class="step-arrow">&rsaquo;</div>
+      <div class="step-item" id="si3">3 VERIFY</div>
+    </div>
+
+    <!-- Status Bar -->
+    <div id="statusBar">Ready. Enter a Google Drive DCP folder URL to begin.</div>
+
+    <!-- ===== SECTION 1: SCAN ===== -->
+    <div id="secScan" class="section">
+      <label for="driveUrlInput">Google Drive DCP Folder URL</label>
+      <input type="url" id="driveUrlInput"
+             placeholder="https://drive.google.com/drive/folders/xxxxxxxxxx">
+      <button id="scanBtn">SCAN FOLDER</button>
+    </div>
+
+    <!-- ===== SECTION 2: DOWNLOAD (hidden until scan) ===== -->
+    <div id="secDownload" class="section" style="display:none">
+
+      <!-- Folder info + file preview (populated by scan) -->
+      <div id="folderInfoDiv"></div>
+      <div id="filePreviewDiv"></div>
+
+      <!-- Client name input -->
+      <div style="margin-bottom:15px">
+        <label for="clientNameInput">Your Name / Company (for download records)</label>
+        <input type="text" id="clientNameInput" placeholder="e.g. ABC Cinema">
+      </div>
+
+      <!-- Destination folder picker -->
+      <label>Local Download Destination</label>
+      <div class="dest-row">
+        <button class="secondary" id="selectDestBtn" type="button">Select Folder</button>
+        <div class="dest-path" id="destPathDisplay">No folder selected.</div>
+      </div>
+
+      <!-- Start / Rescan -->
+      <div class="btn-row">
+        <button class="secondary" id="rescanBtn" type="button">RESCAN</button>
+        <button id="startDownloadBtn" disabled>START DOWNLOAD</button>
+      </div>
+
+      <!-- Overall progress (hidden until download starts) -->
+      <div id="overallProgressDiv" style="display:none; margin-top:18px;">
+        <div class="progress-block">
+          <div class="progress-label">
+            <span id="overallProgressLabel">Preparing...</span>
+            <span id="overallSpeedLabel"></span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="overallBar" style="width:0%">0%</div>
+          </div>
+        </div>
+        <!-- Per-file list -->
+        <div class="file-list-container" id="fileListContainer"></div>
+      </div>
+    </div>
+
+    <!-- ===== SECTION 3: VERIFY (hidden until download done) ===== -->
+    <div id="secVerify" style="display:none">
+      <div id="centralStatusIcon"></div>
+      <div id="preCheckLog"></div>
+
+      <div id="verifyProgressContainer" class="progress-block" style="display:none; margin-top:10px;">
+        <div class="progress-label">
+          <span id="verifyProgressLabel">Hashing...</span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar-fill" id="verifyBar" style="width:0%">0%</div>
+        </div>
+      </div>
+
+      <h2 style="font-size:1.3em;font-weight:700;border-bottom:2px solid #eee;padding-bottom:8px;margin:20px 0 0">
+        Verification Results
+      </h2>
+      <table id="resultsTable" style="display:none">
+        <thead><tr><th>No.</th><th>Asset</th><th>Status</th></tr></thead>
+        <tbody id="assetListBody"></tbody>
+      </table>
+
+      <div style="margin-top:18px">
+        <button class="secondary" id="downloadAnotherBtn">DOWNLOAD ANOTHER DCP</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<footer>&copy; 2025 Full Shine All Rights Reserved.</footer>
+
+<script>
+'use strict';
+
+// ============================================================
+// == Global State
+// ============================================================
+let driveFiles    = [];       // [{ id, name, size, path }]
+let folderName    = '';       // DCP root folder name
+let destDirHandle = null;     // FileSystemDirectoryHandle (local destination)
+let downloadedFileHandles = new Map(); // 'FolderName/path' ??FileSystemFileHandle
+let localFileMap  = new Map(); // 'FolderName/path' ??File (for DCP check)
+
+let oauthToken     = null;
+let tokenFetchTime = 0;
+const TOKEN_TTL_MS = 45 * 60 * 1000; // 45 minutes
+
+let overallStatus = 'OK'; // for finalizeCheck
+
+// ============================================================
+// == Helpers
+// ============================================================
+const $  = id => document.getElementById(id);
+const fmtBytes = b => b >= 1e9 ? (b/1e9).toFixed(2)+' GB' : b >= 1e6 ? (b/1e6).toFixed(1)+' MB' : b >= 1e3 ? (b/1e3).toFixed(0)+' KB' : b+' B';
+const fmtSpeed = s => s >= 1e6 ? (s/1e6).toFixed(1)+' MB/s' : (s/1e3).toFixed(0)+' KB/s';
+const sleep    = ms => new Promise(r => setTimeout(r, ms));
+const GAS_API_URL_DEFAULT = 'REPLACE_WITH_YOUR_GAS_WEB_APP_EXEC_URL';
+const GAS_API_URL = new URLSearchParams(window.location.search).get('gasApi') || GAS_API_URL_DEFAULT;
+
+function setStatus(msg, type = '') {
+  $('statusBar').textContent = msg;
+  $('statusBar').className   = type;
+}
+
+function setStep(n) {
+  [1,2,3].forEach(i => {
+    const el = $('si'+i);
+    el.className = 'step-item' + (i===n?' active': i<n?' done':'');
+  });
+}
+
+function isGASBridgeAvailable() {
+  return typeof google !== 'undefined' &&
+         google.script &&
+         google.script.run;
+}
+
+function isApiUrlConfigured() {
+  return GAS_API_URL && !GAS_API_URL.includes('REPLACE_WITH_YOUR_GAS_WEB_APP_EXEC_URL');
+}
+
+function canUseFolderPicker() {
+  return ('showDirectoryPicker' in window) && (window.top === window.self);
+}
+
+function callJsonp(action, params = {}) {
+  return new Promise((resolve, reject) => {
+    if (!isApiUrlConfigured()) {
+      reject(new Error('Please set GAS_API_URL in index.html first.'));
+      return;
+    }
+
+    const callbackName = '__gasJsonpCb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
+    const query = new URLSearchParams({ action, callback: callbackName });
+    Object.entries(params).forEach(([k, v]) => query.set(k, String(v)));
+    const url = GAS_API_URL + (GAS_API_URL.includes('?') ? '&' : '?') + query.toString();
+
+    const script = document.createElement('script');
+    let timeoutId = null;
+
+    function cleanup() {
+      if (timeoutId) clearTimeout(timeoutId);
+      delete window[callbackName];
+      if (script.parentNode) script.parentNode.removeChild(script);
+    }
+
+    window[callbackName] = payload => {
+      cleanup();
+      if (!payload || payload.ok !== true) {
+        reject(new Error((payload && payload.error) || 'Unknown API error'));
+        return;
+      }
+      resolve(payload.data);
+    };
+
+    script.onerror = () => {
+      cleanup();
+      reject(new Error('Failed to reach GAS API URL.'));
+    };
+
+    timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('GAS API timeout.'));
+    }, 20000);
+
+    script.src = url;
+    document.head.appendChild(script);
+  });
+}
+
+function callBackend(fn, ...args) {
+  if (isGASBridgeAvailable()) {
+    return new Promise((res, rej) =>
+      google.script.run.withSuccessHandler(res).withFailureHandler(e => rej(new Error(e.message)))[fn](...args)
+    );
+  }
+
+  if (fn === 'getOAuthToken') {
+    return callJsonp('getOAuthToken');
+  }
+  if (fn === 'getDriveFolderContents') {
+    return callJsonp('getDriveFolderContents', { folderUrl: args[0] || '' });
+  }
+
+  return Promise.reject(new Error('Unsupported backend function: ' + fn));
+}
+
+// ============================================================
+// == Init
+// ============================================================
+document.addEventListener('DOMContentLoaded', () => {
+  if (!('showDirectoryPicker' in window)) {
+    $('browserWarning').style.display = 'block';
+    $('selectDestBtn').disabled = true;
+    $('startDownloadBtn').disabled = true;
+    $('browserWarning').innerHTML =
+      'Your browser does not support File System Access API.<br>' +
+      'Please use <strong>Chrome</strong> or <strong>Edge 86+</strong> for full functionality.';
+  } else if (!canUseFolderPicker()) {
+    $('browserWarning').style.display = 'block';
+    $('selectDestBtn').disabled = true;
+    $('startDownloadBtn').disabled = true;
+    $('browserWarning').innerHTML =
+      'Google Apps Script Web App runs inside a cross-origin iframe, which blocks folder pickers.<br>' +
+      'Please host this page in a top-level site (not iframe) to enable local folder download.';
+    setStatus('Folder picker is blocked by GAS iframe security policy.', 'error');
+  }
+
+  if (!isGASBridgeAvailable() && !isApiUrlConfigured()) {
+    $('scanBtn').disabled = true;
+    setStatus('Set GAS_API_URL in index.html (or add ?gasApi=... in URL) before scanning.', 'error');
+  }
+
+  // Pre-warm OAuth token
+  refreshTokenIfNeeded().catch(() => {});
+});
+
+// ============================================================
+// == Token Management
+// ============================================================
+async function refreshTokenIfNeeded(force = false) {
+  if (!force && oauthToken && Date.now() - tokenFetchTime < TOKEN_TTL_MS) return oauthToken;
+  oauthToken     = await callBackend('getOAuthToken');
+  tokenFetchTime = Date.now();
+  return oauthToken;
+}
+
+// ============================================================
+// == STEP 1: SCAN
+// ============================================================
+$('scanBtn').addEventListener('click', doScan);
+$('driveUrlInput').addEventListener('keydown', e => { if (e.key === 'Enter') doScan(); });
+
+async function doScan() {
+  const url = $('driveUrlInput').value.trim();
+  if (!url) { setStatus('Please enter a Google Drive folder URL.', 'error'); return; }
+
+  $('scanBtn').disabled = true;
+  setStatus('Scanning Drive folder...');
+
+  try {
+    const result = await callBackend('getDriveFolderContents', url);
+    driveFiles = result.files;
+    folderName = result.folderName;
+
+    if (result.truncated) {
+      setStatus('Warning: Folder is very large. Only ' + result.fileCount +
+                ' files listed before timeout. Some files may be missing.', 'warning');
+    } else {
+      setStatus('Found ' + result.fileCount + ' files (' + fmtBytes(result.totalSize) +
+                ') in "' + folderName + '". Select destination and start download.', 'success');
+    }
+
+    renderFolderInfo(result);
+    $('secDownload').style.display = 'block';
+    setStep(2);
+
+  } catch (err) {
+    setStatus('Scan failed: ' + err.message, 'error');
+  } finally {
+    $('scanBtn').disabled = false;
+  }
+}
+
+function renderFolderInfo(result) {
+  $('folderInfoDiv').innerHTML = `
+    <div class="folder-info">
+      <div class="folder-icon">Folder</div>
+      <div>
+        <div class="folder-name">${result.folderName}</div>
+        <div class="folder-meta">${result.fileCount} files &nbsp;&middot;&nbsp; ${fmtBytes(result.totalSize)}${result.truncated ? ' &nbsp;(truncated)' : ''}</div>
+      </div>
+    </div>`;
+
+  // Show first 50 files, summarise the rest
+  const shown = result.files.slice(0, 50);
+  const rest  = result.files.length - shown.length;
+  let rows = shown.map(f =>
+    `<tr><td>${f.path}</td><td>${fmtBytes(f.size)}</td></tr>`
+  ).join('');
+  if (rest > 0) rows += `<tr><td colspan="2" style="text-align:center;color:#aaa;padding:8px">...and ${rest} more files</td></tr>`;
+
+  $('filePreviewDiv').innerHTML = `
+    <div class="file-preview-scroll">
+      <table class="file-preview-table"><tbody>${rows}</tbody></table>
+    </div>`;
+}
+
+// ============================================================
+// == Rescan
+// ============================================================
+$('rescanBtn').addEventListener('click', () => {
+  $('secDownload').style.display    = 'none';
+  $('overallProgressDiv').style.display = 'none';
+  $('secVerify').style.display      = 'none';
+  destDirHandle = null;
+  $('destPathDisplay').textContent  = 'No folder selected.';
+  $('startDownloadBtn').disabled    = true;
+  $('rescanBtn').disabled           = false;
+  $('selectDestBtn').disabled       = !canUseFolderPicker();
+  downloadedFileHandles.clear();
+  localFileMap.clear();
+  setStep(1);
+  setStatus('Ready. Enter a Google Drive DCP folder URL to begin.');
+});
+
+// ============================================================
+// == STEP 2: Select Destination Folder
+// ============================================================
+$('selectDestBtn').addEventListener('click', async () => {
+  try {
+    destDirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    $('destPathDisplay').textContent  = destDirHandle.name;
+    $('startDownloadBtn').disabled    = false;
+    setStatus('Destination selected: ' + destDirHandle.name + '. Ready to start.', 'success');
+  } catch (e) {
+    if (e.name !== 'AbortError') {
+      if ((e.message || '').includes('Cross origin sub frames')) {
+        setStatus('Folder picker blocked by GAS iframe. Host this UI outside GAS iframe.', 'error');
+      } else {
+        setStatus('Folder selection error: ' + e.message, 'error');
+      }
+    }
+  }
+});
+
+// ============================================================
+// == STEP 2: Start Download
+// ============================================================
+$('startDownloadBtn').addEventListener('click', startDownload);
+
+async function startDownload() {
+  $('startDownloadBtn').disabled = true;
+  $('rescanBtn').disabled        = true;
+  $('selectDestBtn').disabled    = true;
+  $('overallProgressDiv').style.display = 'block';
+
+  setStatus('Fetching access token...');
+  try {
+    await refreshTokenIfNeeded(true);
+  } catch (e) {
+    setStatus('Failed to get access token: ' + e.message, 'error');
+    $('startDownloadBtn').disabled = false;
+    return;
+  }
+
+  // Create DCP root directory inside destination
+  let dcpDirHandle;
+  try {
+    dcpDirHandle = await destDirHandle.getDirectoryHandle(folderName, { create: true });
+  } catch (e) {
+    setStatus('Cannot create DCP folder: ' + e.message, 'error');
+    $('startDownloadBtn').disabled = false;
+    return;
+  }
+
+  // Render per-file rows
+  const listEl = $('fileListContainer');
+  listEl.innerHTML = '';
+  for (const f of driveFiles) {
+    listEl.insertAdjacentHTML('beforeend', `
+      <div class="file-row" id="fr-${f.id}">
+        <div class="file-row-icon icon-queued" id="fi-${f.id}">-</div>
+        <div class="file-row-name">
+          ${f.path}
+          <small id="fs-${f.id}">${fmtBytes(f.size)}</small>
+        </div>
+        <div class="file-row-size"></div>
+        <div class="file-row-mini">
+          <div class="mini-bar-bg"><div class="mini-bar-fill" id="fb-${f.id}"></div></div>
+        </div>
+      </div>`);
+  }
+
+  // Download loop
+  const totalSize     = driveFiles.reduce((s, f) => s + f.size, 0);
+  let   totalDone     = 0;
+  const startTime     = Date.now();
+  downloadedFileHandles.clear();
+
+  for (let i = 0; i < driveFiles.length; i++) {
+    const f = driveFiles[i];
+    setFileStatus(f.id, 'running');
+    setStatus('Downloading ' + (i+1) + '/' + driveFiles.length + ': ' + f.name + '...');
+
+    try {
+      const token     = await refreshTokenIfNeeded();
+      const fileHandle = await resolveFileHandle(dcpDirHandle, f.path, true);
+
+      await downloadFileResumable(f.id, f.size, fileHandle, token, (done) => {
+        const miniPct = f.size > 0 ? done/f.size*100 : 100;
+        $('fb-'+f.id).style.width = miniPct + '%';
+        const totalCurrent = totalDone + done;
+        const pct = totalSize > 0 ? totalCurrent/totalSize*100 : 0;
+        $('overallBar').style.width   = pct.toFixed(1) + '%';
+        $('overallBar').textContent   = pct.toFixed(0) + '%';
+        const elapsed = (Date.now() - startTime) / 1000;
+        const speed   = elapsed > 0 ? totalCurrent / elapsed : 0;
+        $('overallProgressLabel').textContent =
+          (i+1) + '/' + driveFiles.length + ' files  -  ' +
+          fmtBytes(totalCurrent) + ' / ' + fmtBytes(totalSize);
+        $('overallSpeedLabel').textContent = fmtSpeed(speed);
+      });
+
+      totalDone += f.size;
+      setFileStatus(f.id, 'done');
+      $('fb-'+f.id).classList.add('done');
+      downloadedFileHandles.set(folderName + '/' + f.path, fileHandle);
+
+    } catch (e) {
+      setFileStatus(f.id, 'error', e.message);
+      // Continue downloading remaining files
+    }
+  }
+
+  $('overallBar').classList.add('done');
+  setStatus('Download complete! Starting DCP verification...', 'success');
+  setStep(3);
+
+  // Short pause then auto-verify
+  await sleep(600);
+  await runVerify();
+}
+
+function setFileStatus(fileId, state, msg = '') {
+  const icon = $('fi-'+fileId);
+  if (!icon) return;
+  icon.className = 'file-row-icon';
+  if      (state === 'running') { icon.textContent = '...'; icon.classList.add('icon-running'); }
+  else if (state === 'done')    { icon.textContent = 'OK'; icon.classList.add('icon-done'); }
+  else if (state === 'error')   { icon.textContent = 'X'; icon.classList.add('icon-error');
+                                   const sEl = $('fs-'+fileId); if (sEl) sEl.textContent = 'Error: ' + msg; }
+  else if (state === 'skipped') { icon.textContent = 'Skip'; icon.classList.add('icon-skipped'); }
+}
+
+// Resolve (and optionally create) a FileSystemFileHandle from a relative path
+// "sub/deep/file.mxf" ??creates sub/ then deep/ then returns file handle
+async function resolveFileHandle(rootDirHandle, relativePath, create = false) {
+  const parts    = relativePath.replace(/\\/g, '/').split('/');
+  const fileName = parts.pop();
+  let   curDir   = rootDirHandle;
+  for (const part of parts) {
+    if (part) curDir = await curDir.getDirectoryHandle(part, { create });
+  }
+  return curDir.getFileHandle(fileName, { create });
+}
+
+// Chunked, resumable download using Drive API v3 with Range requests
+async function downloadFileResumable(fileId, fileSize, fileHandle, token, onProgress) {
+  const CHUNK = 10 * 1024 * 1024; // 10 MB
+
+  // Check for existing partial file (resume support)
+  let offset = 0;
+  try {
+    const existing = await fileHandle.getFile();
+    if (existing.size > 0 && existing.size < fileSize) {
+      offset = existing.size;
+      onProgress(offset); // Show existing progress immediately
+    } else if (existing.size >= fileSize) {
+      onProgress(fileSize);
+      return; // Already complete
+    }
+  } catch (_) { /* file doesn't exist yet, start from 0 */ }
+
+  while (offset < fileSize) {
+    const freshToken = await refreshTokenIfNeeded();
+    const end        = Math.min(offset + CHUNK - 1, fileSize - 1);
+
+    let response;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        response = await fetch(
+          'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media',
+          { headers: { 'Authorization': 'Bearer ' + freshToken,
+                       'Range': 'bytes=' + offset + '-' + end } }
+        );
+        if (response.status === 200 || response.status === 206) break;
+        if (response.status === 401) { oauthToken = null; } // force refresh next loop
+        if (attempt === 2) throw new Error('HTTP ' + response.status);
+      } catch (e) {
+        if (attempt === 2) throw e;
+        await sleep(1000 * (attempt + 1));
+      }
+    }
+
+    // Stream chunk directly to disk (no large in-memory buffer)
+    const writable = await fileHandle.createWritable({ keepExistingData: true });
+    await writable.seek(offset);
+    const reader = response.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await writable.write(value);
+      offset += value.byteLength;
+      onProgress(offset);
+    }
+    await writable.close();
+  }
+}
+
+// ============================================================
+// == STEP 3: DCP VERIFY
+// ============================================================
+async function runVerify() {
+  $('secVerify').style.display = 'block';
+  $('resultsTable').style.display = 'none';
+  $('preCheckLog').innerHTML = '';
+  $('centralStatusIcon').innerHTML = '';
+  $('assetListBody').innerHTML = '';
+  overallStatus = 'OK';
+
+  setStatus('Building local file map...');
+
+  // Rebuild localFileMap from downloaded FileSystemFileHandle objects
+  localFileMap.clear();
+  for (const [key, fh] of downloadedFileHandles) {
+    try { localFileMap.set(key, await fh.getFile()); } catch(_) {}
+  }
+
+  // Find ASSETMAP and PKL ??same logic as FSDcheck
+  const pklRegex = new RegExp(
+    '^' + folderName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+    '\\/((pkl|PKL)_[a-f0-9\\-]{36}|.*\\.pkl)\\.xml$'
+  );
+  const assetmapFile = localFileMap.get(folderName + '/ASSETMAP') ||
+                       localFileMap.get(folderName + '/ASSETMAP.xml');
+  let pklFile = null;
+  for (const path of localFileMap.keys()) {
+    if (pklRegex.test(path)) { pklFile = localFileMap.get(path); break; }
+  }
+
+  if (!assetmapFile) {
+    addLogMessage('error', 'Missing ASSETMAP (or ASSETMAP.xml) in DCP folder.');
+    finalizeCheck(); return;
+  }
+  if (!pklFile) {
+    addLogMessage('error', 'Could not find a valid PKL XML file in DCP folder.');
+    finalizeCheck(); return;
+  }
+
+  addLogMessage('ok', 'Found ASSETMAP: ' + assetmapFile.name);
+  addLogMessage('ok', 'Found PKL: ' + pklFile.name);
+
+  let assetMapText, pklText;
+  try {
+    [assetMapText, pklText] = await Promise.all([
+      readFileAsText(assetmapFile), readFileAsText(pklFile)
+    ]);
+  } catch (e) {
+    addLogMessage('error', 'Error reading XML files: ' + e.message);
+    finalizeCheck(); return;
+  }
+
+  setStatus('Parsing PKL and ASSETMAP locally...');
+  let assetList;
+  try {
+    assetList = buildAssetListFromXml(assetMapText, pklText);
+  } catch (e) {
+    addLogMessage('error', 'XML parse error: ' + e.message);
+    finalizeCheck();
+    return;
+  }
+
+  if (!assetList || assetList.length === 0) {
+    addLogMessage('error', 'No valid assets were found in PKL/ASSETMAP.');
+    finalizeCheck(); return;
+  }
+
+  const total = assetList.length;
+  setStatus('Found ' + total + ' assets. Starting local hash calculation...');
+
+  // Show verify progress bar
+  $('verifyProgressContainer').style.display = 'block';
+  $('verifyBar').style.width = '0%';
+
+  // Create result rows
+  $('resultsTable').style.display = 'table';
+  let idx = 1;
+  for (const asset of assetList) {
+    addAssetResultRow(idx, asset.uuid, asset.name || ('UUID: ' + asset.uuid.substring(0,8) + '...'));
+    idx++;
+  }
+
+  // Hash calculation loop
+  let processed = 0;
+
+  for (const asset of assetList) {
+    processed++;
+    const assetName = asset.name || ('UUID: ' + asset.uuid.substring(0,8) + '...');
+    setStatus('Hashing ' + processed + '/' + total + ': ' + assetName + '...');
+
+    const pct = processed / total * 100;
+    $('verifyBar').style.width   = pct.toFixed(1) + '%';
+    $('verifyBar').textContent   = pct.toFixed(0) + '%';
+    $('verifyProgressLabel').textContent = 'Hashing ' + processed + ' / ' + total;
+
+    const detailsEl = document.getElementById('details-' + asset.uuid);
+    if (detailsEl) detailsEl.innerHTML = '<span class="asset-status-badge status-running">Running</span>';
+
+    if (!asset.path) {
+      updateAssetStatus(asset.uuid, 'Missing', 'Path missing in ASSETMAP');
+      continue;
+    }
+
+    const normalizedPath = asset.path.replace(/\\/g, '/');
+    const fullKey        = folderName + '/' + normalizedPath;
+    const assetFile      = localFileMap.get(fullKey);
+
+    if (!assetFile) {
+      updateAssetStatus(asset.uuid, 'Missing', 'File not found locally');
+      continue;
+    }
+
+    try {
+      const hash = await calculateSha1HashFromBlob(assetFile);
+      const expectedHash = (asset.expectedHash || '').trim();
+      const actualHash   = (hash || '').trim();
+      const sizeMatches  = Number(asset.expectedSize) === Number(assetFile.size);
+      const hashMatches  = expectedHash === actualHash;
+
+      if (sizeMatches && hashMatches) {
+        updateAssetStatus(asset.uuid, 'Good', 'OK');
+      } else {
+        const why = !sizeMatches ? 'Size mismatch' : 'Hash mismatch';
+        updateAssetStatus(asset.uuid, 'Bad', why);
+      }
+    } catch (e) {
+      addLogMessage('error', 'Hash error for ' + assetName + ': ' + e.message);
+      updateAssetStatus(asset.uuid, 'Bad', 'Hash error');
+    }
+  }
+
+  $('verifyProgressContainer').style.display = 'none';
+  setStatus('All hashes calculated. Finalizing...');
+  finalizeCheck();
+}
+
+function buildAssetListFromXml(assetMapText, pklText) {
+  const parser = new DOMParser();
+  const pklDoc = parser.parseFromString(pklText, 'application/xml');
+  const amDoc  = parser.parseFromString(assetMapText, 'application/xml');
+
+  if (pklDoc.querySelector('parsererror')) throw new Error('PKL XML is invalid.');
+  if (amDoc.querySelector('parsererror'))  throw new Error('ASSETMAP XML is invalid.');
+
+  const pklInfo = new Map();
+  const assetMapInfo = new Map();
+
+  for (const asset of findElementsByLocalName(pklDoc.documentElement, 'Asset')) {
+    const uuid = getFirstTextByLocalName(asset, 'Id').replace('urn:uuid:', '');
+    const name = getFirstTextByLocalName(asset, 'OriginalFileName') ||
+                 getFirstTextByLocalName(asset, 'AnnotationText') || '';
+    const hash = getFirstTextByLocalName(asset, 'Hash');
+    const sizeText = getFirstTextByLocalName(asset, 'Size');
+    const size = sizeText ? parseInt(sizeText, 10) : NaN;
+    if (uuid && hash && !isNaN(size)) {
+      pklInfo.set(uuid, { name, hash, size });
+    }
+  }
+
+  for (const asset of findElementsByLocalName(amDoc.documentElement, 'Asset')) {
+    const uuid = getFirstTextByLocalName(asset, 'Id').replace('urn:uuid:', '');
+    const chunkList = findElementsByLocalName(asset, 'ChunkList');
+    if (chunkList.length === 0) continue;
+    const chunks = findElementsByLocalName(chunkList[0], 'Chunk');
+    if (chunks.length === 0) continue;
+    const path = getFirstTextByLocalName(chunks[0], 'Path');
+    if (uuid && path) assetMapInfo.set(uuid, path);
+  }
+
+  const assets = [];
+  for (const [uuid, info] of pklInfo.entries()) {
+    const path = assetMapInfo.get(uuid) || '';
+    const fallbackName = path ? path.replace(/\\/g, '/').split('/').pop() : ('UUID: ' + uuid.substring(0, 8) + '...');
+    assets.push({
+      uuid,
+      name: info.name || fallbackName,
+      path,
+      expectedHash: info.hash,
+      expectedSize: info.size
+    });
+  }
+  return assets;
+}
+
+function findElementsByLocalName(root, name) {
+  const results = [];
+  if (!root) return results;
+  const all = root.getElementsByTagName('*');
+  for (let i = 0; i < all.length; i++) {
+    const node = all[i];
+    if (node.localName === name) results.push(node);
+  }
+  return results;
+}
+
+function getFirstTextByLocalName(root, name) {
+  const nodes = findElementsByLocalName(root, name);
+  if (!nodes.length) return '';
+  return (nodes[0].textContent || '').trim();
+}
+
+function finalizeCheck() {
+  if ($('preCheckLog').querySelector('.error')) overallStatus = 'Error';
+  if (document.querySelector('.status-icon-error'))                overallStatus = 'Error';
+  else if (document.querySelector('.status-icon-missing') && overallStatus !== 'Error') overallStatus = 'Warning';
+
+  setStatus('Check completed! Overall Status: ' + overallStatus + '.',
+            overallStatus === 'OK' ? 'success' : 'error');
+
+  const icon = $('centralStatusIcon');
+  if (overallStatus === 'OK') {
+    icon.innerHTML = '<span class="central-icon-ok">OK</span>';
+  } else if (overallStatus === 'Warning') {
+    icon.innerHTML = '<span class="central-icon-warning">!</span>';
+  } else {
+    icon.innerHTML = '<span class="central-icon-error">X</span>';
+  }
+}
+
+// ============================================================
+// == UI helpers (same as FSDcheck)
+// ============================================================
+function addAssetResultRow(index, uuid, assetName) {
+  $('assetListBody').insertAdjacentHTML('beforeend', `
+    <tr>
+      <td>${index}</td>
+      <td>
+        <strong>${assetName}</strong>
+        <div class="asset-details" id="details-${uuid}">
+          <span class="asset-status-badge status-queued">Queued</span>
+        </div>
+      </td>
+      <td id="status-icon-${uuid}"></td>
+    </tr>`);
+}
+
+function updateAssetStatus(uuid, status, message) {
+  const detailsEl = document.getElementById('details-' + uuid);
+  const statusEl  = document.getElementById('status-icon-' + uuid);
+  if (!detailsEl || !statusEl) return;
+
+  if (status === 'Good') {
+    statusEl.innerHTML  = '<span class="status-icon-ok">OK</span>';
+    detailsEl.innerHTML = '<span class="asset-status-badge status-processed">Processed</span>';
+  } else if (status === 'Missing') {
+    statusEl.innerHTML  = '<span class="status-icon-missing">!</span>';
+    detailsEl.innerHTML = '<span class="details-missing">Missing</span>';
+  } else {
+    statusEl.innerHTML  = '<span class="status-icon-error">X</span>';
+    detailsEl.innerHTML = '<span class="details-bad">Failed</span>';
+  }
+}
+
+function addLogMessage(type, message) {
+  if (type === 'ok') return; // only show errors/warnings in log
+  $('preCheckLog').style.display = 'block';
+  $('preCheckLog').insertAdjacentHTML('beforeend', `
+    <div class="result-item ${type}">
+      <span class="result-icon">${type === 'error' ? 'X' : '!'}</span>
+      <span class="result-text">${message}</span>
+    </div>`);
+}
+
+// ============================================================
+// == Download Again Button
+// ============================================================
+$('downloadAnotherBtn').addEventListener('click', () => {
+  driveFiles  = [];
+  folderName  = '';
+  destDirHandle = null;
+  downloadedFileHandles.clear();
+  localFileMap.clear();
+  overallStatus = 'OK';
+
+  $('driveUrlInput').value         = '';
+  $('clientNameInput').value       = '';
+  $('destPathDisplay').textContent = 'No folder selected.';
+  $('startDownloadBtn').disabled   = true;
+  $('rescanBtn').disabled          = false;
+  $('selectDestBtn').disabled      = !canUseFolderPicker();
+  $('secDownload').style.display   = 'none';
+  $('secVerify').style.display     = 'none';
+  $('overallProgressDiv').style.display = 'none';
+  setStep(1);
+  setStatus('Ready. Enter a Google Drive DCP folder URL to begin.');
+});
+
+// ============================================================
+// == SHA1 (identical to FSDcheck index.html)
+// ============================================================
+function bufferToBase64(buffer) {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+async function calculateSha1HashFromBlob(fileBlob) {
+  const chunkSize  = 10 * 1024 * 1024;
+  const fileReader = new FileReader();
+  let   offset     = 0;
+  const hasher     = sha1.create();
+
+  return new Promise((resolve, reject) => {
+    fileReader.onload = e => {
+      try {
+        const chunk = e.target.result;
+        hasher.update(chunk);
+        offset += chunk.byteLength;
+        if (offset < fileBlob.size) readNextChunk();
+        else resolve(hasher.hex());
+      } catch (err) { reject(err); }
+    };
+    fileReader.onerror = e =>
+      reject(new Error('File read error: ' + (e.target.error?.name || 'Unknown')));
+
+    function readNextChunk() {
+      fileReader.readAsArrayBuffer(fileBlob.slice(offset, offset + chunkSize));
+    }
+    readNextChunk();
+  }).then(hexHash => {
+    const hexBytes    = hexHash.match(/.{1,2}/g).map(b => parseInt(b, 16));
+    const binaryBuffer = new Uint8Array(hexBytes).buffer;
+    return bufferToBase64(binaryBuffer);
+  });
+}
+
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+</script>
+</body>
+</html>
+

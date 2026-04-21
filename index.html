@@ -434,7 +434,7 @@ const $  = id => document.getElementById(id);
 const fmtBytes = b => b >= 1e9 ? (b/1e9).toFixed(2)+' GB' : b >= 1e6 ? (b/1e6).toFixed(1)+' MB' : b >= 1e3 ? (b/1e3).toFixed(0)+' KB' : b+' B';
 const fmtSpeed = s => s >= 1e6 ? (s/1e6).toFixed(1)+' MB/s' : (s/1e3).toFixed(0)+' KB/s';
 const sleep    = ms => new Promise(r => setTimeout(r, ms));
-const GAS_API_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbyd2_QrZZBmXcFHTUMuKODN3locg7CVZraaM8s-_z2HP8sIfePkhQ7e_Z2HRmnd0_4B/exec';
+const GAS_API_URL_DEFAULT = 'REPLACE_WITH_YOUR_GAS_WEB_APP_EXEC_URL';
 const GAS_API_URL = new URLSearchParams(window.location.search).get('gasApi') || GAS_API_URL_DEFAULT;
 
 function setStatus(msg, type = '') {
@@ -724,9 +724,11 @@ async function startDownload() {
   const totalSize = driveFiles.reduce((s, f) => s + f.size, 0);
   const parsedParallel = parseInt($('parallelDownloadsSelect').value || '2', 10);
   const parallelDownloads = [1, 2, 3].includes(parsedParallel) ? parsedParallel : 2;
+  const downloadQueue = driveFiles.slice().sort((a, b) => (b.size || 0) - (a.size || 0)); // largest files first
   let totalDone = 0;
   let completedFiles = 0;
   let nextIndex = 0;
+  let activeWorkers = 0;
   const startTime = Date.now();
   const perFileDone = new Map(); // fileId -> bytes downloaded
   downloadedFileHandles.clear();
@@ -740,18 +742,20 @@ async function startDownload() {
     $('overallProgressLabel').textContent =
       completedFiles + '/' + driveFiles.length + ' files  -  ' +
       fmtBytes(totalDone) + ' / ' + fmtBytes(totalSize);
-    $('overallSpeedLabel').textContent = fmtSpeed(speed);
+    $('overallSpeedLabel').textContent = fmtSpeed(speed) + '  |  active: ' + activeWorkers;
   }
 
   async function downloadWorker() {
     while (true) {
       const idx = nextIndex;
       nextIndex += 1;
-      if (idx >= driveFiles.length) break;
+      if (idx >= downloadQueue.length) break;
 
-      const f = driveFiles[idx];
+      const f = downloadQueue[idx];
+      activeWorkers += 1;
+      renderOverallProgress();
       setFileStatus(f.id, 'running');
-      setStatus('Downloading (' + parallelDownloads + ' streams) file ' + (idx + 1) + '/' + driveFiles.length + ': ' + f.name + '...');
+      setStatus('Downloading (' + parallelDownloads + ' streams) ' + f.name + '...');
 
       try {
         const token = await refreshTokenIfNeeded();
@@ -774,6 +778,7 @@ async function startDownload() {
       } catch (e) {
         setFileStatus(f.id, 'error', e.message);
       } finally {
+        activeWorkers = Math.max(0, activeWorkers - 1);
         completedFiles += 1;
         renderOverallProgress();
       }
@@ -820,7 +825,7 @@ async function resolveFileHandle(rootDirHandle, relativePath, create = false) {
 
 // Chunked, resumable download using Drive API v3 with Range requests
 async function downloadFileResumable(fileId, fileSize, fileHandle, token, onProgress) {
-  const CHUNK = 64 * 1024 * 1024; // 64 MB
+  const CHUNK = 128 * 1024 * 1024; // 128 MB
 
   // Check for existing partial file (resume support)
   let offset = 0;
@@ -859,15 +864,16 @@ async function downloadFileResumable(fileId, fileSize, fileHandle, token, onProg
         }
       }
 
-      // Stream chunk directly to disk (no large in-memory buffer)
-      const reader = response.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        await writable.write(value);
-        offset += value.byteLength;
-        onProgress(offset);
+      // High-throughput mode:
+      // read one whole range chunk into memory, then write once.
+      // This avoids thousands of tiny write() calls that can throttle performance.
+      const buf = await response.arrayBuffer();
+      if (!buf || buf.byteLength === 0) {
+        throw new Error('Empty response chunk');
       }
+      await writable.write(buf);
+      offset += buf.byteLength;
+      onProgress(offset);
     }
   } finally {
     await writable.close();

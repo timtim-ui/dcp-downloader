@@ -436,6 +436,9 @@ const fmtSpeed = s => s >= 1e6 ? (s/1e6).toFixed(1)+' MB/s' : (s/1e3).toFixed(0)
 const sleep    = ms => new Promise(r => setTimeout(r, ms));
 const GAS_API_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbyd2_QrZZBmXcFHTUMuKODN3locg7CVZraaM8s-_z2HP8sIfePkhQ7e_Z2HRmnd0_4B/exec';
 const GAS_API_URL = new URLSearchParams(window.location.search).get('gasApi') || GAS_API_URL_DEFAULT;
+const PORTAL_TOKEN = new URLSearchParams(window.location.search).get('token') || '';
+let apiSession = '';
+let signedInEmail = '';
 
 function setStatus(msg, type = '') {
   $('statusBar').textContent = msg;
@@ -476,6 +479,7 @@ function callJsonp(action, params = {}) {
 
     const callbackName = '__gasJsonpCb_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
     const query = new URLSearchParams({ action, callback: callbackName });
+    if (apiSession) query.set('apiSession', apiSession);
     Object.entries(params).forEach(([k, v]) => query.set(k, String(v)));
     const url = GAS_API_URL + (GAS_API_URL.includes('?') ? '&' : '?') + query.toString();
 
@@ -525,6 +529,9 @@ function callBackend(fn, ...args) {
   if (fn === 'getDriveFolderContents') {
     return callJsonp('getDriveFolderContents', { folderUrl: args[0] || '' });
   }
+  if (fn === 'exchangePortalToken') {
+    return callJsonp('exchangePortalToken', { token: args[0] || '' });
+  }
 
   return Promise.reject(new Error('Unsupported backend function: ' + fn));
 }
@@ -541,6 +548,7 @@ async function sendReportEmail(payload) {
   const form = new URLSearchParams();
   form.set('action', 'sendCheckReportEmail');
   form.set('payload', JSON.stringify(payload));
+  form.set('apiSession', apiSession || '');
 
   // no-cors: request is sent, but browser won't expose response body.
   // This is fine for fire-and-forget report emails.
@@ -577,10 +585,41 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!isGASBridgeAvailable() && !isApiUrlConfigured()) {
     $('scanBtn').disabled = true;
     setStatus('Set GAS_API_URL in index.html (or add ?gasApi=... in URL) before scanning.', 'error');
+    return;
   }
 
-  // Pre-warm OAuth token
-  refreshTokenIfNeeded().catch(() => {});
+  if (!isGASBridgeAvailable()) {
+    // GitHub/static mode: require secure portal token exchange first
+    if (!PORTAL_TOKEN) {
+      $('scanBtn').disabled = true;
+      $('startDownloadBtn').disabled = true;
+      setStatus('Access denied. Please enter from DCP Login Portal link.', 'error');
+      return;
+    }
+    $('scanBtn').disabled = true;
+    setStatus('Validating portal session...');
+    callBackend('exchangePortalToken', PORTAL_TOKEN)
+      .then(res => {
+        apiSession = res.apiSession || '';
+        signedInEmail = res.email || '';
+        $('scanBtn').disabled = false;
+        setStatus('Signed in as ' + signedInEmail + '. Ready to scan.', 'success');
+        if (!$('reportEmailInput').value && signedInEmail) {
+          $('reportEmailInput').value = signedInEmail;
+        }
+        refreshTokenIfNeeded().catch(() => {});
+      })
+      .catch(err => {
+        $('scanBtn').disabled = true;
+        $('startDownloadBtn').disabled = true;
+        setStatus('Session validation failed: ' + err.message, 'error');
+      });
+  }
+
+  if (isGASBridgeAvailable()) {
+    // Pre-warm OAuth token
+    refreshTokenIfNeeded().catch(() => {});
+  }
 });
 
 // ============================================================

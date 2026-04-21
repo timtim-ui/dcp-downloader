@@ -7,6 +7,8 @@
 const ADMIN_EMAIL      = 'timtim@fullshineff.com.tw';
 const DCP_PORTAL_EMAIL = 'dcp-portal@fullshineff.com.tw';
 const DCP_PORTAL_NAME  = 'Full Shine DCP Portal';
+const LOGIN_PORTAL_VALIDATE_URL = 'REPLACE_WITH_LOGIN_PORTAL_EXEC_URL';
+const API_SESSION_TTL_SECONDS = 3600;
 
 /* --- 1. ??? --- */
 function doGet(e) {
@@ -24,9 +26,10 @@ function doPost(e) {
   try {
     const action = (e && e.parameter && e.parameter.action) ? String(e.parameter.action) : '';
     if (action === 'sendCheckReportEmail') {
+      const session = getRequiredApiSession_(e && e.parameter);
       const payloadText = (e && e.parameter && e.parameter.payload) ? String(e.parameter.payload) : '{}';
       const payload = JSON.parse(payloadText);
-      const data = sendCheckReportEmail(payload);
+      const data = sendCheckReportEmail(payload, session.email);
       return createApiResponse_({ ok: true, data: data }, null);
     }
     return createApiResponse_({ ok: false, error: 'Unsupported action: ' + action }, null);
@@ -37,13 +40,19 @@ function doPost(e) {
 
 function handleApiGet_(e, action) {
   try {
+    const params = (e && e.parameter) ? e.parameter : {};
     let data;
     switch (action) {
+      case 'exchangePortalToken':
+        data = exchangePortalToken_((params && params.token) || '');
+        break;
       case 'getOAuthToken':
+        getRequiredApiSession_(params);
         data = getOAuthToken();
         break;
       case 'getDriveFolderContents':
-        data = getDriveFolderContents((e.parameter && e.parameter.folderUrl) || '');
+        getRequiredApiSession_(params);
+        data = getDriveFolderContents((params && params.folderUrl) || '');
         break;
       case 'ping':
         data = { ok: true, now: new Date().toISOString() };
@@ -51,9 +60,9 @@ function handleApiGet_(e, action) {
       default:
         throw new Error('Unsupported action: ' + action);
     }
-    return createApiResponse_({ ok: true, data: data }, e.parameter && e.parameter.callback);
+    return createApiResponse_({ ok: true, data: data }, params && params.callback);
   } catch (err) {
-    return createApiResponse_({ ok: false, error: err.message || String(err) }, e.parameter && e.parameter.callback);
+    return createApiResponse_({ ok: false, error: err.message || String(err) }, e && e.parameter && e.parameter.callback);
   }
 }
 
@@ -73,7 +82,71 @@ function createApiResponse_(payload, callback) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function sendCheckReportEmail(payload) {
+function exchangePortalToken_(portalToken) {
+  const token = String(portalToken || '').trim();
+  if (!token) throw new Error('Missing portal token.');
+  const portalResult = validatePortalToken_(token);
+  if (!portalResult || portalResult.valid !== true) {
+    throw new Error((portalResult && portalResult.reason) || 'Portal token invalid.');
+  }
+  const email = String(portalResult.email || '').trim();
+  if (!isValidEmail_(email)) {
+    throw new Error('Portal returned invalid user email.');
+  }
+  const apiSession = createApiSession_(email);
+  return { apiSession: apiSession, email: email, expiresInSec: API_SESSION_TTL_SECONDS };
+}
+
+function validatePortalToken_(portalToken) {
+  if (!LOGIN_PORTAL_VALIDATE_URL || LOGIN_PORTAL_VALIDATE_URL.indexOf('REPLACE_WITH_LOGIN_PORTAL_EXEC_URL') !== -1) {
+    throw new Error('LOGIN_PORTAL_VALIDATE_URL is not configured.');
+  }
+  const resp = UrlFetchApp.fetch(LOGIN_PORTAL_VALIDATE_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ action: 'validateSession', token: portalToken }),
+    muteHttpExceptions: true
+  });
+  const code = resp.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error('Portal validation failed with HTTP ' + code);
+  }
+  const text = resp.getContentText();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (_) {
+    throw new Error('Portal returned non-JSON response.');
+  }
+  return data;
+}
+
+function createApiSession_(email) {
+  const sessionToken = Utilities.getUuid() + '_' + Utilities.getUuid().replace(/-/g, '');
+  const sessionData = { email: email, createdAt: Date.now() };
+  CacheService.getScriptCache().put('api_session_' + sessionToken, JSON.stringify(sessionData), API_SESSION_TTL_SECONDS);
+  return sessionToken;
+}
+
+function getRequiredApiSession_(params) {
+  const p = params || {};
+  const apiSession = String((p.apiSession || '')).trim();
+  if (!apiSession) throw new Error('Missing apiSession.');
+  const raw = CacheService.getScriptCache().get('api_session_' + apiSession);
+  if (!raw) throw new Error('apiSession expired or invalid.');
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (_) {
+    throw new Error('apiSession parse failed.');
+  }
+  if (!data || !isValidEmail_(data.email)) {
+    throw new Error('apiSession email invalid.');
+  }
+  return data;
+}
+
+function sendCheckReportEmail(payload, sessionEmail) {
   if (!payload || typeof payload !== 'object') {
     throw new Error('Invalid report payload.');
   }
@@ -84,7 +157,14 @@ function sendCheckReportEmail(payload) {
     Utilities.formatDate(new Date(checkedAtRaw), 'GMT+8', 'yyyy-MM-dd HH:mm:ss') :
     Utilities.formatDate(new Date(), 'GMT+8', 'yyyy-MM-dd HH:mm:ss');
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
-  const reportEmail = String(payload.reportEmail || '').trim();
+  const reportEmailInput = String(payload.reportEmail || '').trim();
+  const safeSessionEmail = String(sessionEmail || '').trim();
+  const hasSessionEmail = isValidEmail_(safeSessionEmail);
+  const effectiveUserEmail = hasSessionEmail ? safeSessionEmail : reportEmailInput;
+  if (!isValidEmail_(effectiveUserEmail)) {
+    throw new Error('User email is invalid.');
+  }
+  const reportEmail = isValidEmail_(reportEmailInput) ? reportEmailInput : effectiveUserEmail;
 
   let overallStatus = String(payload.overallStatus || '').trim();
   if (!overallStatus) {
@@ -94,13 +174,14 @@ function sendCheckReportEmail(payload) {
   }
 
   const recipients = [ADMIN_EMAIL];
-  if (isValidEmail_(reportEmail) && recipients.indexOf(reportEmail) === -1) {
+  // Prevent abuse: user can only receive report to own signed-in email.
+  if (reportEmail === effectiveUserEmail && recipients.indexOf(reportEmail) === -1) {
     recipients.push(reportEmail);
   }
 
   const subject = 'DCP Check Report: ' + overallStatus + ' - ' + folderName;
   const htmlBody = buildReportEmailHtml_({
-    reportEmail: reportEmail || 'N/A',
+    reportEmail: reportEmail || effectiveUserEmail || 'N/A',
     folderName: folderName,
     checkedAt: checkedAt,
     overallStatus: overallStatus,

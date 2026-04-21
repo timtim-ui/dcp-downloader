@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -104,13 +104,13 @@
     label {
       display: block; font-weight: 700; margin-bottom: 10px; font-size: 1em;
     }
-    input[type="text"], input[type="url"] {
+    input[type="text"], input[type="url"], select {
       width: 100%; padding: 12px 15px;
       border: 2px solid var(--color-grey-border); border-radius: 8px;
       font-family: var(--font-mono); font-size: .88em;
       transition: border-color .2s; margin-bottom: 12px; background: white;
     }
-    input[type="text"]:focus, input[type="url"]:focus {
+    input[type="text"]:focus, input[type="url"]:focus, select:focus {
       outline: none; border-color: var(--color-primary-light);
     }
 
@@ -344,6 +344,15 @@
       <div class="dest-row">
         <button class="secondary" id="selectDestBtn" type="button">Select Folder</button>
         <div class="dest-path" id="destPathDisplay">No folder selected.</div>
+      </div>
+
+      <div style="margin-bottom:12px">
+        <label for="parallelDownloadsSelect">Parallel Downloads</label>
+        <select id="parallelDownloadsSelect">
+          <option value="1">1 stream (safe)</option>
+          <option value="2" selected>2 streams (recommended)</option>
+          <option value="3">3 streams (aggressive)</option>
+        </select>
       </div>
 
       <!-- Start / Rescan -->
@@ -629,6 +638,7 @@ $('rescanBtn').addEventListener('click', () => {
   $('startDownloadBtn').disabled    = true;
   $('rescanBtn').disabled           = false;
   $('selectDestBtn').disabled       = !canUseFolderPicker();
+  $('parallelDownloadsSelect').disabled = false;
   downloadedFileHandles.clear();
   localFileMap.clear();
   setStep(1);
@@ -664,6 +674,7 @@ async function startDownload() {
   $('startDownloadBtn').disabled = true;
   $('rescanBtn').disabled        = true;
   $('selectDestBtn').disabled    = true;
+  $('parallelDownloadsSelect').disabled = true;
   $('overallProgressDiv').style.display = 'block';
 
   setStatus('Fetching access token...');
@@ -672,6 +683,9 @@ async function startDownload() {
   } catch (e) {
     setStatus('Failed to get access token: ' + e.message, 'error');
     $('startDownloadBtn').disabled = false;
+    $('rescanBtn').disabled        = false;
+    $('selectDestBtn').disabled    = false;
+    $('parallelDownloadsSelect').disabled = false;
     return;
   }
 
@@ -682,6 +696,9 @@ async function startDownload() {
   } catch (e) {
     setStatus('Cannot create DCP folder: ' + e.message, 'error');
     $('startDownloadBtn').disabled = false;
+    $('rescanBtn').disabled        = false;
+    $('selectDestBtn').disabled    = false;
+    $('parallelDownloadsSelect').disabled = false;
     return;
   }
 
@@ -703,46 +720,71 @@ async function startDownload() {
       </div>`);
   }
 
-  // Download loop
-  const totalSize     = driveFiles.reduce((s, f) => s + f.size, 0);
-  let   totalDone     = 0;
-  const startTime     = Date.now();
+  // Download loop (parallel workers)
+  const totalSize = driveFiles.reduce((s, f) => s + f.size, 0);
+  const parsedParallel = parseInt($('parallelDownloadsSelect').value || '2', 10);
+  const parallelDownloads = [1, 2, 3].includes(parsedParallel) ? parsedParallel : 2;
+  let totalDone = 0;
+  let completedFiles = 0;
+  let nextIndex = 0;
+  const startTime = Date.now();
+  const perFileDone = new Map(); // fileId -> bytes downloaded
   downloadedFileHandles.clear();
 
-  for (let i = 0; i < driveFiles.length; i++) {
-    const f = driveFiles[i];
-    setFileStatus(f.id, 'running');
-    setStatus('Downloading ' + (i+1) + '/' + driveFiles.length + ': ' + f.name + '...');
+  function renderOverallProgress() {
+    const pct = totalSize > 0 ? (totalDone / totalSize) * 100 : 0;
+    $('overallBar').style.width = pct.toFixed(1) + '%';
+    $('overallBar').textContent = pct.toFixed(0) + '%';
+    const elapsed = (Date.now() - startTime) / 1000;
+    const speed   = elapsed > 0 ? totalDone / elapsed : 0;
+    $('overallProgressLabel').textContent =
+      completedFiles + '/' + driveFiles.length + ' files  -  ' +
+      fmtBytes(totalDone) + ' / ' + fmtBytes(totalSize);
+    $('overallSpeedLabel').textContent = fmtSpeed(speed);
+  }
 
-    try {
-      const token     = await refreshTokenIfNeeded();
-      const fileHandle = await resolveFileHandle(dcpDirHandle, f.path, true);
+  async function downloadWorker() {
+    while (true) {
+      const idx = nextIndex;
+      nextIndex += 1;
+      if (idx >= driveFiles.length) break;
 
-      await downloadFileResumable(f.id, f.size, fileHandle, token, (done) => {
-        const miniPct = f.size > 0 ? done/f.size*100 : 100;
-        $('fb-'+f.id).style.width = miniPct + '%';
-        const totalCurrent = totalDone + done;
-        const pct = totalSize > 0 ? totalCurrent/totalSize*100 : 0;
-        $('overallBar').style.width   = pct.toFixed(1) + '%';
-        $('overallBar').textContent   = pct.toFixed(0) + '%';
-        const elapsed = (Date.now() - startTime) / 1000;
-        const speed   = elapsed > 0 ? totalCurrent / elapsed : 0;
-        $('overallProgressLabel').textContent =
-          (i+1) + '/' + driveFiles.length + ' files  -  ' +
-          fmtBytes(totalCurrent) + ' / ' + fmtBytes(totalSize);
-        $('overallSpeedLabel').textContent = fmtSpeed(speed);
-      });
+      const f = driveFiles[idx];
+      setFileStatus(f.id, 'running');
+      setStatus('Downloading (' + parallelDownloads + ' streams) file ' + (idx + 1) + '/' + driveFiles.length + ': ' + f.name + '...');
 
-      totalDone += f.size;
-      setFileStatus(f.id, 'done');
-      $('fb-'+f.id).classList.add('done');
-      downloadedFileHandles.set(folderName + '/' + f.path, fileHandle);
+      try {
+        const token = await refreshTokenIfNeeded();
+        const fileHandle = await resolveFileHandle(dcpDirHandle, f.path, true);
 
-    } catch (e) {
-      setFileStatus(f.id, 'error', e.message);
-      // Continue downloading remaining files
+        await downloadFileResumable(f.id, f.size, fileHandle, token, (done) => {
+          const prev = perFileDone.get(f.id) || 0;
+          const delta = Math.max(0, done - prev);
+          perFileDone.set(f.id, done);
+          totalDone += delta;
+
+          const miniPct = f.size > 0 ? (done / f.size) * 100 : 100;
+          $('fb-' + f.id).style.width = miniPct + '%';
+          renderOverallProgress();
+        });
+
+        setFileStatus(f.id, 'done');
+        $('fb-' + f.id).classList.add('done');
+        downloadedFileHandles.set(folderName + '/' + f.path, fileHandle);
+      } catch (e) {
+        setFileStatus(f.id, 'error', e.message);
+      } finally {
+        completedFiles += 1;
+        renderOverallProgress();
+      }
     }
   }
+
+  const workers = [];
+  for (let i = 0; i < parallelDownloads; i++) {
+    workers.push(downloadWorker());
+  }
+  await Promise.all(workers);
 
   $('overallBar').classList.add('done');
   setStatus('Download complete! Starting DCP verification...', 'success');
@@ -778,7 +820,7 @@ async function resolveFileHandle(rootDirHandle, relativePath, create = false) {
 
 // Chunked, resumable download using Drive API v3 with Range requests
 async function downloadFileResumable(fileId, fileSize, fileHandle, token, onProgress) {
-  const CHUNK = 10 * 1024 * 1024; // 10 MB
+  const CHUNK = 64 * 1024 * 1024; // 64 MB
 
   // Check for existing partial file (resume support)
   let offset = 0;
@@ -793,38 +835,41 @@ async function downloadFileResumable(fileId, fileSize, fileHandle, token, onProg
     }
   } catch (_) { /* file doesn't exist yet, start from 0 */ }
 
-  while (offset < fileSize) {
-    const freshToken = await refreshTokenIfNeeded();
-    const end        = Math.min(offset + CHUNK - 1, fileSize - 1);
+  const writable = await fileHandle.createWritable({ keepExistingData: true });
+  await writable.seek(offset);
+  try {
+    while (offset < fileSize) {
+      const freshToken = await refreshTokenIfNeeded();
+      const end        = Math.min(offset + CHUNK - 1, fileSize - 1);
 
-    let response;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        response = await fetch(
-          'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media',
-          { headers: { 'Authorization': 'Bearer ' + freshToken,
-                       'Range': 'bytes=' + offset + '-' + end } }
-        );
-        if (response.status === 200 || response.status === 206) break;
-        if (response.status === 401) { oauthToken = null; } // force refresh next loop
-        if (attempt === 2) throw new Error('HTTP ' + response.status);
-      } catch (e) {
-        if (attempt === 2) throw e;
-        await sleep(1000 * (attempt + 1));
+      let response;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          response = await fetch(
+            'https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media',
+            { headers: { 'Authorization': 'Bearer ' + freshToken,
+                         'Range': 'bytes=' + offset + '-' + end } }
+          );
+          if (response.status === 200 || response.status === 206) break;
+          if (response.status === 401) { oauthToken = null; } // force refresh next loop
+          if (attempt === 2) throw new Error('HTTP ' + response.status);
+        } catch (e) {
+          if (attempt === 2) throw e;
+          await sleep(1000 * (attempt + 1));
+        }
+      }
+
+      // Stream chunk directly to disk (no large in-memory buffer)
+      const reader = response.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await writable.write(value);
+        offset += value.byteLength;
+        onProgress(offset);
       }
     }
-
-    // Stream chunk directly to disk (no large in-memory buffer)
-    const writable = await fileHandle.createWritable({ keepExistingData: true });
-    await writable.seek(offset);
-    const reader = response.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      await writable.write(value);
-      offset += value.byteLength;
-      onProgress(offset);
-    }
+  } finally {
     await writable.close();
   }
 }
@@ -1110,6 +1155,7 @@ $('downloadAnotherBtn').addEventListener('click', () => {
   $('startDownloadBtn').disabled   = true;
   $('rescanBtn').disabled          = false;
   $('selectDestBtn').disabled      = !canUseFolderPicker();
+  $('parallelDownloadsSelect').disabled = false;
   $('secDownload').style.display   = 'none';
   $('secVerify').style.display     = 'none';
   $('overallProgressDiv').style.display = 'none';

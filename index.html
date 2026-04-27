@@ -427,9 +427,27 @@ const fmtSpeed = s => s >= 1e6 ? (s/1e6).toFixed(1)+' MB/s' : (s/1e3).toFixed(0)
 const sleep    = ms => new Promise(r => setTimeout(r, ms));
 const GAS_API_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbyd2_QrZZBmXcFHTUMuKODN3locg7CVZraaM8s-_z2HP8sIfePkhQ7e_Z2HRmnd0_4B/exec';
 const GAS_API_URL = new URLSearchParams(window.location.search).get('gasApi') || GAS_API_URL_DEFAULT;
-const PORTAL_TOKEN = new URLSearchParams(window.location.search).get('token') || '';
+const PORTAL_SESSION = new URLSearchParams(window.location.search).get('portalSession') || new URLSearchParams(window.location.search).get('token') || '';
 let apiSession = '';
 let signedInEmail = '';
+const ERROR_MESSAGES = {
+  'ERR-NET-001': 'System temporarily unavailable.',
+  'ERR-NET-002': 'System temporarily unavailable.',
+  'ERR-AUTH-001': 'Please sign in again.',
+  'ERR-AUTH-002': 'Please sign in again.',
+  'ERR-AUTH-003': 'Sign-in verification failed.',
+  'ERR-AUTH-004': 'Session expired. Please sign in again.',
+  'ERR-AUTH-005': 'Session expired. Please sign in again.',
+  'ERR-AUTH-006': 'Session verification failed.',
+  'ERR-AUTH-007': 'This account is unavailable.',
+  'ERR-AUTH-008': 'This account is unavailable.',
+  'ERR-AUTH-009': 'This folder is not available for this account.',
+  'ERR-DRIVE-001': 'Folder link is invalid.',
+  'ERR-DRIVE-002': 'Folder cannot be opened.',
+  'ERR-REPORT-001': 'Report request failed.',
+  'ERR-REPORT-002': 'Report request failed.',
+  'ERR-UNEXPECTED': 'Request failed.'
+};
 
 function setStatus(msg, type = '') {
   $('statusBar').textContent = msg;
@@ -457,6 +475,18 @@ function canUseFolderPicker() {
   return ('showDirectoryPicker' in window) && (window.top === window.self);
 }
 
+function getErrorCode(err) {
+  const msg = err && err.message ? String(err.message) : '';
+  const match = msg.match(/\[(ERR-[A-Z0-9-]+)\]/);
+  return match ? match[1] : 'ERR-UNEXPECTED';
+}
+
+function formatPublicError(prefix, err) {
+  const code = getErrorCode(err);
+  const text = ERROR_MESSAGES[code] || ERROR_MESSAGES['ERR-UNEXPECTED'];
+  return prefix + ': ' + text + ' [' + code + ']';
+}
+
 function callJsonp(action, params = {}) {
   return new Promise((resolve, reject) => {
     if (!isApiUrlConfigured()) {
@@ -482,7 +512,9 @@ function callJsonp(action, params = {}) {
     window[callbackName] = payload => {
       cleanup();
       if (!payload || payload.ok !== true) {
-        reject(new Error((payload && payload.error) || 'Unknown API error'));
+        const errorCode = payload && payload.errorCode ? payload.errorCode : 'ERR-UNEXPECTED';
+        const errorText = payload && payload.error ? payload.error : 'Request failed.';
+        reject(new Error('[' + errorCode + '] ' + errorText));
         return;
       }
       resolve(payload.data);
@@ -490,12 +522,12 @@ function callJsonp(action, params = {}) {
 
     script.onerror = () => {
       cleanup();
-      reject(new Error('Failed to reach GAS API URL.'));
+      reject(new Error('[ERR-NET-001] Network request failed.'));
     };
 
     timeoutId = setTimeout(() => {
       cleanup();
-      reject(new Error('GAS API timeout.'));
+      reject(new Error('[ERR-NET-002] Request timeout.'));
     }, 20000);
 
     script.src = url;
@@ -577,32 +609,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (!isGASBridgeAvailable()) {
     // GitHub/static mode: require secure portal token exchange first
-    if (!PORTAL_TOKEN) {
+    if (!PORTAL_SESSION) {
       $('scanBtn').disabled = true;
       $('startDownloadBtn').disabled = true;
-      setStatus('Access denied. Please enter from DCP Login Portal link.', 'error');
+      setStatus('Access denied. Please enter from the login portal link. [ERR-AUTH-001]', 'error');
       return;
     }
     $('scanBtn').disabled = true;
     setStatus('Validating portal session...');
-    callBackend('exchangePortalToken', PORTAL_TOKEN)
+    callBackend('exchangePortalToken', PORTAL_SESSION)
       .then(res => {
         apiSession = res.apiSession || '';
         signedInEmail = res.email || '';
         $('scanBtn').disabled = false;
         setStatus('Signed in as ' + signedInEmail + '. Ready to scan.', 'success');
-        refreshTokenIfNeeded().catch(() => {});
       })
       .catch(err => {
         $('scanBtn').disabled = true;
         $('startDownloadBtn').disabled = true;
-        setStatus('Session validation failed: ' + err.message, 'error');
+        setStatus(formatPublicError('Session validation failed', err), 'error');
       });
-  }
-
-  if (isGASBridgeAvailable()) {
-    // Pre-warm OAuth token
-    refreshTokenIfNeeded().catch(() => {});
   }
 });
 
@@ -647,7 +673,7 @@ async function doScan() {
     setStep(2);
 
   } catch (err) {
-    setStatus('Scan failed: ' + err.message, 'error');
+    setStatus(formatPublicError('Scan failed', err), 'error');
   } finally {
     $('scanBtn').disabled = false;
   }
@@ -732,7 +758,7 @@ async function startDownload() {
   try {
     await refreshTokenIfNeeded(true);
   } catch (e) {
-    setStatus('Failed to get access token: ' + e.message, 'error');
+    setStatus(formatPublicError('Download initialization failed', e), 'error');
     $('startDownloadBtn').disabled = false;
     $('rescanBtn').disabled        = false;
     $('selectDestBtn').disabled    = false;
@@ -957,7 +983,7 @@ async function runVerify() {
       const emailText = signedInEmail ? signedInEmail : 'signed-in user';
       setStatus('Check completed! Overall Status: ' + overallStatus + '. Report email queued to ' + emailText + '.', overallStatus === 'OK' ? 'success' : 'error');
     } catch (e) {
-      addLogMessage('error', 'Failed to submit report email request: ' + e.message);
+      addLogMessage('error', formatPublicError('Report request failed', e));
     }
   }
 

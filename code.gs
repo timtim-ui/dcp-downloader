@@ -7,8 +7,8 @@
 const ADMIN_EMAIL      = 'timtim@fullshineff.com.tw';
 const DCP_PORTAL_EMAIL = 'dcp-portal@fullshineff.com.tw';
 const DCP_PORTAL_NAME  = 'Full Shine DCP Portal';
-const LOGIN_PORTAL_VALIDATE_URL = 'REPLACE_WITH_LOGIN_PORTAL_EXEC_URL';
 const API_SESSION_TTL_SECONDS = 43200;
+const PORTAL_SIGNING_SECRET = 'FS_DCP_PORTAL_V1_20260428_9f4bcf7ab1b34e4ba9898c8fdbe55f3d';
 
 /* --- 1. ??? --- */
 function doGet(e) {
@@ -34,7 +34,7 @@ function doPost(e) {
     }
     return createApiResponse_({ ok: false, error: 'Unsupported action: ' + action }, null);
   } catch (err) {
-    return createApiResponse_({ ok: false, error: err.message || String(err) }, null);
+    return createApiResponse_(toErrorPayload_(err), null);
   }
 }
 
@@ -61,8 +61,18 @@ function handleApiGet_(e, action) {
     }
     return createApiResponse_({ ok: true, data: data }, params && params.callback);
   } catch (err) {
-    return createApiResponse_({ ok: false, error: err.message || String(err) }, e && e.parameter && e.parameter.callback);
+    return createApiResponse_(toErrorPayload_(err), e && e.parameter && e.parameter.callback);
   }
+}
+
+function toErrorPayload_(err) {
+  var message = err && err.message ? String(err.message) : String(err);
+  var match = message.match(/^\[(ERR-[A-Z0-9-]+)\]\s*(.*)$/);
+  return {
+    ok: false,
+    errorCode: match ? match[1] : 'ERR-UNEXPECTED',
+    error: match ? (match[2] || 'Request failed.') : 'Request failed.'
+  };
 }
 
 function createApiResponse_(payload, callback) {
@@ -83,14 +93,14 @@ function createApiResponse_(payload, callback) {
 
 function exchangePortalToken_(portalToken) {
   const token = String(portalToken || '').trim();
-  if (!token) throw new Error('Missing portal token.');
+  if (!token) throw new Error('[ERR-AUTH-001] Sign-in token is missing.');
   const portalResult = validatePortalToken_(token);
   if (!portalResult || portalResult.valid !== true) {
-    throw new Error((portalResult && portalResult.reason) || 'Portal token invalid.');
+    throw new Error('[ERR-AUTH-002] Sign-in token is invalid.');
   }
   const email = String(portalResult.email || '').trim();
   if (!isValidEmail_(email)) {
-    throw new Error('Portal returned invalid user email.');
+    throw new Error('[ERR-AUTH-003] Signed-in user is invalid.');
   }
   const sessionProfile = buildSessionProfile_(portalResult);
   assertSessionAccountAllowed_(sessionProfile);
@@ -105,27 +115,41 @@ function exchangePortalToken_(portalToken) {
 }
 
 function validatePortalToken_(portalToken) {
-  if (!LOGIN_PORTAL_VALIDATE_URL || LOGIN_PORTAL_VALIDATE_URL.indexOf('REPLACE_WITH_LOGIN_PORTAL_EXEC_URL') !== -1) {
-    throw new Error('LOGIN_PORTAL_VALIDATE_URL is not configured.');
+  var parts = String(portalToken || '').split('.');
+  if (parts.length !== 2) {
+    return { valid: false, reason: 'Malformed signed token.' };
   }
-  const resp = UrlFetchApp.fetch(LOGIN_PORTAL_VALIDATE_URL, {
-    method: 'post',
-    contentType: 'application/json',
-    payload: JSON.stringify({ action: 'validateSession', token: portalToken }),
-    muteHttpExceptions: true
-  });
-  const code = resp.getResponseCode();
-  if (code < 200 || code >= 300) {
-    throw new Error('Portal validation failed with HTTP ' + code);
+  var payloadB64 = parts[0];
+  var sigB64 = parts[1];
+  var expectedSig = signPortalPayload_(payloadB64);
+  if (sigB64 !== expectedSig) {
+    return { valid: false, reason: 'Signature mismatch.' };
   }
-  const text = resp.getContentText();
-  let data;
+
+  var jsonText;
   try {
-    data = JSON.parse(text);
+    jsonText = Utilities.newBlob(Utilities.base64DecodeWebSafe(payloadB64)).getDataAsString();
   } catch (_) {
-    throw new Error('Portal returned non-JSON response.');
+    return { valid: false, reason: 'Payload decode failed.' };
   }
-  return data;
+
+  var data;
+  try {
+    data = JSON.parse(jsonText);
+  } catch (_) {
+    return { valid: false, reason: 'Payload parse failed.' };
+  }
+
+  var now = Date.now();
+  if (!data || !data.email || !data.exp || now > Number(data.exp)) {
+    return { valid: false, reason: 'Signed token expired.' };
+  }
+  return Object.assign({ valid: true }, data);
+}
+
+function signPortalPayload_(payloadB64) {
+  var sigBytes = Utilities.computeHmacSha256Signature(payloadB64, PORTAL_SIGNING_SECRET, Utilities.Charset.UTF_8);
+  return Utilities.base64EncodeWebSafe(sigBytes).replace(/=+$/g, '');
 }
 
 function createApiSession_(sessionProfile) {
@@ -140,15 +164,15 @@ function getRequiredApiSession_(params) {
   const apiSession = String((p.apiSession || '')).trim();
   if (!apiSession) throw new Error('Missing apiSession.');
   const raw = CacheService.getScriptCache().get('api_session_' + apiSession);
-  if (!raw) throw new Error('apiSession expired or invalid.');
+  if (!raw) throw new Error('[ERR-AUTH-004] Session expired or invalid.');
   let data;
   try {
     data = JSON.parse(raw);
   } catch (_) {
-    throw new Error('apiSession parse failed.');
+    throw new Error('[ERR-AUTH-005] Session parse failed.');
   }
   if (!data || !isValidEmail_(data.email)) {
-    throw new Error('apiSession email invalid.');
+    throw new Error('[ERR-AUTH-006] Session email invalid.');
   }
   assertSessionAccountAllowed_(data);
   // Sliding session TTL keeps long downloads and verification alive.
@@ -196,10 +220,10 @@ function isSessionExpired_(sessionData) {
 function assertSessionAccountAllowed_(sessionData) {
   const status = String(sessionData && sessionData.status || '').trim().toLowerCase();
   if (status && status !== 'ok') {
-    throw new Error('This account is disabled.');
+    throw new Error('[ERR-AUTH-007] Account is disabled.');
   }
   if (isSessionExpired_(sessionData)) {
-    throw new Error('This account has expired.');
+    throw new Error('[ERR-AUTH-008] Account has expired.');
   }
 }
 
@@ -208,13 +232,13 @@ function assertSessionCanAccessFolder_(sessionData, folderId) {
   const allowList = Array.isArray(sessionData.folderIds) ? sessionData.folderIds : [];
   if (!allowList.length) return;
   if (allowList.indexOf(folderId) === -1) {
-    throw new Error('This account is not allowed to access this folder.');
+    throw new Error('[ERR-AUTH-009] Folder is not allowed for this account.');
   }
 }
 
 function sendCheckReportEmail(payload, sessionEmail) {
   if (!payload || typeof payload !== 'object') {
-    throw new Error('Invalid report payload.');
+    throw new Error('[ERR-REPORT-001] Report payload is invalid.');
   }
 
   const folderName = String(payload.folderName || 'Unknown Folder');
@@ -225,7 +249,7 @@ function sendCheckReportEmail(payload, sessionEmail) {
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const safeSessionEmail = String(sessionEmail || '').trim();
   if (!isValidEmail_(safeSessionEmail)) {
-    throw new Error('Signed-in user email is invalid.');
+    throw new Error('[ERR-REPORT-002] Signed-in user email is invalid.');
   }
 
   let overallStatus = String(payload.overallStatus || '').trim();
@@ -325,14 +349,14 @@ function getOAuthToken() {
 function getDriveFolderContents(folderUrl) {
   const folderId = _extractFolderId(folderUrl);
   if (!folderId) {
-    throw new Error('Invalid Google Drive folder URL or folder ID.');
+    throw new Error('[ERR-DRIVE-001] Folder URL or folder ID is invalid.');
   }
 
   let rootFolder;
   try {
     rootFolder = DriveApp.getFolderById(folderId);
   } catch (e) {
-    throw new Error('Failed to open Drive folder. Please check sharing permission. ' + e.message);
+    throw new Error('[ERR-DRIVE-002] Drive folder cannot be opened.');
   }
 
   const files = [];
@@ -392,7 +416,7 @@ function getDriveFolderContents(folderUrl) {
 function getDriveFolderContentsForSession_(folderUrl, sessionData) {
   const folderId = _extractFolderId(folderUrl);
   if (!folderId) {
-    throw new Error('Invalid Google Drive folder URL or folder ID.');
+    throw new Error('[ERR-DRIVE-001] Folder URL or folder ID is invalid.');
   }
   assertSessionCanAccessFolder_(sessionData, folderId);
   return getDriveFolderContents(folderUrl);

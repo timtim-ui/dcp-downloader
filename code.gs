@@ -60,7 +60,7 @@ function handleApiGet_(e, action) {
         data = { ok: true, now: new Date().toISOString() };
         break;
       default:
-        throw new Error('Unsupported action: ' + action);
+        throw new Error('[ERR-API-001] Unsupported action.');
     }
     return createApiResponse_({ ok: true, data: data }, params && params.callback);
   } catch (err) {
@@ -70,7 +70,7 @@ function handleApiGet_(e, action) {
 
 function toErrorPayload_(err) {
   var message = err && err.message ? String(err.message) : String(err);
-  var match = message.match(/^\[(ERR-[A-Z0-9-]+)\]\s*(.*)$/);
+  var match = message.match(/\[(ERR-[A-Z0-9-]+)\]\s*(.*)$/);
   return {
     ok: false,
     errorCode: match ? match[1] : 'ERR-UNEXPECTED',
@@ -100,6 +100,8 @@ function exchangeLoginTicket_(loginTicket) {
     if (!ticket) throw new Error('[ERR-AUTH-001] Sign-in ticket is missing.');
     const ticketResult = consumeLoginTicket_(ticket);
     if (!ticketResult || ticketResult.valid !== true) {
+      const reason = ticketResult && ticketResult.reason ? String(ticketResult.reason) : '';
+      Logger.log('[exchangeLoginTicket_] ticket rejected: ' + reason);
       throw new Error('[ERR-AUTH-002] Sign-in ticket is invalid.');
     }
     const email = normalizeEmail_(ticketResult.email);
@@ -119,7 +121,7 @@ function exchangeLoginTicket_(loginTicket) {
     };
   } catch (err) {
     const msg = err && err.message ? String(err.message) : String(err);
-    if (/^\[ERR-/.test(msg)) throw err;
+    if (/\[(ERR-[A-Z0-9-]+)\]/.test(msg)) throw err;
     Logger.log('[exchangeLoginTicket_] ' + msg);
     throw new Error('[ERR-AUTH-006] Session verification failed.');
   }
@@ -129,10 +131,22 @@ function consumeLoginTicket_(ticket) {
   const normalizedTicket = String(ticket || '').trim();
   if (!normalizedTicket) return { valid: false, reason: 'Missing ticket.' };
 
-  const lock = LockService.getScriptLock();
-  lock.waitLock(30000);
+  let lock = null;
   try {
-    const ss = SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID);
+    lock = LockService.getScriptLock();
+    lock.waitLock(30000);
+  } catch (lockErr) {
+    Logger.log('[consumeLoginTicket_] lock error: ' + (lockErr && lockErr.message ? lockErr.message : lockErr));
+    return { valid: false, reason: 'Ticket store busy.' };
+  }
+  try {
+    let ss;
+    try {
+      ss = SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID);
+    } catch (openErr) {
+      Logger.log('[consumeLoginTicket_] openById failed: ' + (openErr && openErr.message ? openErr.message : openErr));
+      return { valid: false, reason: 'Ticket store unavailable.' };
+    }
     const sheet = ss.getSheetByName(LOGIN_TICKET_SHEET_NAME);
     if (!sheet || sheet.getLastRow() < 2) {
       return { valid: false, reason: 'Ticket store empty.' };
@@ -178,8 +192,11 @@ function consumeLoginTicket_(ticket) {
       valid: true,
       email: normalizeEmail_(rowValues[emailCol])
     };
+  } catch (err) {
+    Logger.log('[consumeLoginTicket_] unexpected: ' + (err && err.message ? err.message : err));
+    return { valid: false, reason: 'Ticket store error.' };
   } finally {
-    lock.releaseLock();
+    try { if (lock) lock.releaseLock(); } catch (_) {}
   }
 }
 
@@ -534,6 +551,52 @@ function FORCE_ALL_AUTH_DOWNLOADER() {
   ScriptApp.getOAuthToken();
   GmailApp.getAliases();
   Logger.log('Downloader authorization check completed.');
+}
+
+/**
+ * Removes used or expired login-ticket rows older than the retention window.
+ * Safe to run from a time-driven trigger (every few hours).
+ */
+function cleanupLoginTickets() {
+  const RETENTION_HOURS = 24;
+  const cutoffMs = Date.now() - (RETENTION_HOURS * 60 * 60 * 1000);
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(30000)) {
+    Logger.log('[cleanupLoginTickets] lock busy, skipping.');
+    return;
+  }
+  try {
+    const ss = SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName(LOGIN_TICKET_SHEET_NAME);
+    if (!sheet || sheet.getLastRow() < 2) return;
+
+    const values = sheet.getDataRange().getValues();
+    const headerMap = {};
+    values[0].forEach(function(header, index) {
+      headerMap[normalizeHeader_(header)] = index;
+    });
+    const expiresAtCol = headerMap.expiresat;
+    const usedCol = headerMap.used;
+    if (expiresAtCol === undefined || usedCol === undefined) return;
+
+    const rowsToDelete = [];
+    for (let i = 1; i < values.length; i++) {
+      const expiresAt = normalizeExpireAt_(values[i][expiresAtCol]);
+      const expiredMs = expiresAt ? new Date(expiresAt).getTime() : 0;
+      const used = String(values[i][usedCol] || '').trim().toLowerCase() === 'true';
+      if (used || (expiredMs && expiredMs < cutoffMs)) {
+        rowsToDelete.push(i + 1);
+      }
+    }
+
+    rowsToDelete.sort(function(a, b) { return b - a; });
+    rowsToDelete.forEach(function(row) { sheet.deleteRow(row); });
+    Logger.log('[cleanupLoginTickets] removed ' + rowsToDelete.length + ' row(s).');
+  } catch (err) {
+    Logger.log('[cleanupLoginTickets] error: ' + (err && err.message ? err.message : err));
+  } finally {
+    try { lock.releaseLock(); } catch (_) {}
+  }
 }
 
 /* --- 4. ????Session嚗圾??PKL + ASSETMAP嚗?憛翰??manifest嚗?-- */

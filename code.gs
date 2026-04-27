@@ -8,10 +8,7 @@ const ADMIN_EMAIL      = 'timtim@fullshineff.com.tw';
 const DCP_PORTAL_EMAIL = 'dcp-portal@fullshineff.com.tw';
 const DCP_PORTAL_NAME  = 'Full Shine DCP Portal';
 const API_SESSION_TTL_SECONDS = 43200;
-const USER_DIRECTORY_SPREADSHEET_ID = '1Ah2996MNmAxLf6qB1GVXnCZRuERHNugB9pjDasJJGNw';
-const USER_LIST_SHEET_NAME = 'UserList';
-const LOGIN_TICKET_SHEET_NAME = 'LoginTickets';
-const USER_LIST_CACHE_MINUTES = 10;
+const PORTAL_SIGNING_SECRET = 'FS_DCP_PORTAL_V1_20260428_9f4bcf7ab1b34e4ba9898c8fdbe55f3d';
 
 /* --- 1. ??? --- */
 function doGet(e) {
@@ -46,8 +43,8 @@ function handleApiGet_(e, action) {
     const params = (e && e.parameter) ? e.parameter : {};
     let data;
     switch (action) {
-      case 'exchangeLoginTicket':
-        data = exchangeLoginTicket_((params && params.ticket) || '');
+      case 'exchangePortalToken':
+        data = exchangePortalToken_((params && params.token) || '');
         break;
       case 'getOAuthToken':
         getRequiredApiSession_(params);
@@ -60,7 +57,7 @@ function handleApiGet_(e, action) {
         data = { ok: true, now: new Date().toISOString() };
         break;
       default:
-        throw new Error('[ERR-API-001] Unsupported action.');
+        throw new Error('Unsupported action: ' + action);
     }
     return createApiResponse_({ ok: true, data: data }, params && params.callback);
   } catch (err) {
@@ -70,7 +67,7 @@ function handleApiGet_(e, action) {
 
 function toErrorPayload_(err) {
   var message = err && err.message ? String(err.message) : String(err);
-  var match = message.match(/\[(ERR-[A-Z0-9-]+)\]\s*(.*)$/);
+  var match = message.match(/^\[(ERR-[A-Z0-9-]+)\]\s*(.*)$/);
   return {
     ok: false,
     errorCode: match ? match[1] : 'ERR-UNEXPECTED',
@@ -94,110 +91,65 @@ function createApiResponse_(payload, callback) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function exchangeLoginTicket_(loginTicket) {
-  try {
-    const ticket = String(loginTicket || '').trim();
-    if (!ticket) throw new Error('[ERR-AUTH-001] Sign-in ticket is missing.');
-    const ticketResult = consumeLoginTicket_(ticket);
-    if (!ticketResult || ticketResult.valid !== true) {
-      const reason = ticketResult && ticketResult.reason ? String(ticketResult.reason) : '';
-      Logger.log('[exchangeLoginTicket_] ticket rejected: ' + reason);
-      throw new Error('[ERR-AUTH-002] Sign-in ticket is invalid.');
-    }
-    const email = normalizeEmail_(ticketResult.email);
-    if (!isValidEmail_(email)) {
-      throw new Error('[ERR-AUTH-003] Signed-in user is invalid.');
-    }
-    const user = getUserRecord_(email);
-    const sessionProfile = buildSessionProfileFromUser_(user);
-    assertSessionAccountAllowed_(sessionProfile);
-    const apiSession = createApiSession_(sessionProfile);
-    return {
-      apiSession: apiSession,
-      email: sessionProfile.email,
-      expiresInSec: API_SESSION_TTL_SECONDS,
-      folderIds: sessionProfile.folderIds,
-      expireAt: sessionProfile.expireAt || ''
-    };
-  } catch (err) {
-    const msg = err && err.message ? String(err.message) : String(err);
-    if (/\[(ERR-[A-Z0-9-]+)\]/.test(msg)) throw err;
-    Logger.log('[exchangeLoginTicket_] ' + msg);
-    throw new Error('[ERR-AUTH-006] Session verification failed.');
+function exchangePortalToken_(portalToken) {
+  const token = String(portalToken || '').trim();
+  if (!token) throw new Error('[ERR-AUTH-001] Sign-in token is missing.');
+  const portalResult = validatePortalToken_(token);
+  if (!portalResult || portalResult.valid !== true) {
+    throw new Error('[ERR-AUTH-002] Sign-in token is invalid.');
   }
+  const email = String(portalResult.email || '').trim();
+  if (!isValidEmail_(email)) {
+    throw new Error('[ERR-AUTH-003] Signed-in user is invalid.');
+  }
+  const sessionProfile = buildSessionProfile_(portalResult);
+  assertSessionAccountAllowed_(sessionProfile);
+  const apiSession = createApiSession_(sessionProfile);
+  return {
+    apiSession: apiSession,
+    email: sessionProfile.email,
+    expiresInSec: API_SESSION_TTL_SECONDS,
+    folderIds: sessionProfile.folderIds,
+    expireAt: sessionProfile.expireAt || ''
+  };
 }
 
-function consumeLoginTicket_(ticket) {
-  const normalizedTicket = String(ticket || '').trim();
-  if (!normalizedTicket) return { valid: false, reason: 'Missing ticket.' };
-
-  let lock = null;
-  try {
-    lock = LockService.getScriptLock();
-    lock.waitLock(30000);
-  } catch (lockErr) {
-    Logger.log('[consumeLoginTicket_] lock error: ' + (lockErr && lockErr.message ? lockErr.message : lockErr));
-    return { valid: false, reason: 'Ticket store busy.' };
+function validatePortalToken_(portalToken) {
+  var parts = String(portalToken || '').split('.');
+  if (parts.length !== 2) {
+    return { valid: false, reason: 'Malformed signed token.' };
   }
-  try {
-    let ss;
-    try {
-      ss = SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID);
-    } catch (openErr) {
-      Logger.log('[consumeLoginTicket_] openById failed: ' + (openErr && openErr.message ? openErr.message : openErr));
-      return { valid: false, reason: 'Ticket store unavailable.' };
-    }
-    const sheet = ss.getSheetByName(LOGIN_TICKET_SHEET_NAME);
-    if (!sheet || sheet.getLastRow() < 2) {
-      return { valid: false, reason: 'Ticket store empty.' };
-    }
-
-    const values = sheet.getDataRange().getValues();
-    const headerMap = {};
-    values[0].forEach(function(header, index) {
-      headerMap[normalizeHeader_(header)] = index;
-    });
-
-    const ticketCol = headerMap.ticket;
-    const emailCol = headerMap.email;
-    const expiresAtCol = headerMap.expiresat;
-    const usedCol = headerMap.used;
-    const usedAtCol = headerMap.usedat;
-    if ([ticketCol, emailCol, expiresAtCol, usedCol, usedAtCol].some(function(v) { return v === undefined; })) {
-      return { valid: false, reason: 'Ticket store misconfigured.' };
-    }
-
-    const finder = sheet.getRange(2, ticketCol + 1, sheet.getLastRow() - 1, 1)
-      .createTextFinder(normalizedTicket)
-      .matchEntireCell(true)
-      .findNext();
-    if (!finder) {
-      return { valid: false, reason: 'Ticket not found.' };
-    }
-
-    const rowIndex = finder.getRow();
-    const rowValues = sheet.getRange(rowIndex, 1, 1, sheet.getLastColumn()).getValues()[0];
-    const expiresAt = normalizeExpireAt_(rowValues[expiresAtCol]);
-    const used = String(rowValues[usedCol] || '').trim().toLowerCase() === 'true';
-    if (used) {
-      return { valid: false, reason: 'Ticket already used.' };
-    }
-    if (!expiresAt || Date.now() > new Date(expiresAt).getTime()) {
-      return { valid: false, reason: 'Ticket expired.' };
-    }
-
-    const usedAtValue = Utilities.formatDate(new Date(), 'GMT+8', "yyyy-MM-dd'T'HH:mm:ssXXX");
-    sheet.getRange(rowIndex, usedCol + 1, 1, 2).setValues([['true', usedAtValue]]);
-    return {
-      valid: true,
-      email: normalizeEmail_(rowValues[emailCol])
-    };
-  } catch (err) {
-    Logger.log('[consumeLoginTicket_] unexpected: ' + (err && err.message ? err.message : err));
-    return { valid: false, reason: 'Ticket store error.' };
-  } finally {
-    try { if (lock) lock.releaseLock(); } catch (_) {}
+  var payloadB64 = parts[0];
+  var sigB64 = parts[1];
+  var expectedSig = signPortalPayload_(payloadB64);
+  if (sigB64 !== expectedSig) {
+    return { valid: false, reason: 'Signature mismatch.' };
   }
+
+  var jsonText;
+  try {
+    jsonText = Utilities.newBlob(Utilities.base64DecodeWebSafe(payloadB64)).getDataAsString();
+  } catch (_) {
+    return { valid: false, reason: 'Payload decode failed.' };
+  }
+
+  var data;
+  try {
+    data = JSON.parse(jsonText);
+  } catch (_) {
+    return { valid: false, reason: 'Payload parse failed.' };
+  }
+
+  var now = Date.now();
+  if (!data || !data.email || !data.exp || now > Number(data.exp)) {
+    return { valid: false, reason: 'Signed token expired.' };
+  }
+  return Object.assign({ valid: true }, data);
+}
+
+function signPortalPayload_(payloadB64) {
+  var sigBytes = Utilities.computeHmacSha256Signature(payloadB64, PORTAL_SIGNING_SECRET, Utilities.Charset.UTF_8);
+  return Utilities.base64EncodeWebSafe(sigBytes).replace(/=+$/g, '');
 }
 
 function createApiSession_(sessionProfile) {
@@ -210,7 +162,7 @@ function createApiSession_(sessionProfile) {
 function getRequiredApiSession_(params) {
   const p = params || {};
   const apiSession = String((p.apiSession || '')).trim();
-  if (!apiSession) throw new Error('[ERR-AUTH-004] Session expired or invalid.');
+  if (!apiSession) throw new Error('Missing apiSession.');
   const raw = CacheService.getScriptCache().get('api_session_' + apiSession);
   if (!raw) throw new Error('[ERR-AUTH-004] Session expired or invalid.');
   let data;
@@ -228,29 +180,15 @@ function getRequiredApiSession_(params) {
   return data;
 }
 
-function buildSessionProfileFromUser_(user) {
-  if (!user || !isValidEmail_(user.email)) {
-    throw new Error('[ERR-AUTH-003] Signed-in user is invalid.');
-  }
+function buildSessionProfile_(portalResult) {
   return {
-    email: normalizeEmail_(user.email),
-    status: String(user.status || '').trim().toLowerCase(),
-    folderIds: normalizeFolderIds_(user.folderIds),
-    expireAt: normalizeExpireAt_(user.expireAt),
-    company: String(user.company || '').trim(),
-    name: String(user.name || '').trim()
+    email: String(portalResult.email || '').trim().toLowerCase(),
+    status: String(portalResult.status || '').trim().toLowerCase(),
+    folderIds: normalizeFolderIds_(portalResult.folderIds),
+    expireAt: normalizeExpireAt_(portalResult.expireAt),
+    company: String(portalResult.company || '').trim(),
+    name: String(portalResult.name || '').trim()
   };
-}
-
-function normalizeHeader_(header) {
-  return String(header || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]+/g, '');
-}
-
-function normalizeEmail_(email) {
-  return String(email || '').trim().toLowerCase();
 }
 
 function normalizeFolderIds_(value) {
@@ -273,51 +211,6 @@ function normalizeExpireAt_(value) {
   return parsed.toISOString();
 }
 
-function readUserDirectory_() {
-  const scriptCache = CacheService.getScriptCache();
-  const cacheKey = 'authorized_user_directory_v3';
-  const cached = scriptCache.get(cacheKey);
-  if (cached) return JSON.parse(cached);
-
-  const ss = SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID);
-  const sheet = ss.getSheetByName(USER_LIST_SHEET_NAME);
-  if (!sheet) throw new Error('[ERR-AUTH-003] User directory is unavailable.');
-
-  const values = sheet.getDataRange().getValues();
-  if (!values || values.length < 2) {
-    scriptCache.put(cacheKey, JSON.stringify({}), USER_LIST_CACHE_MINUTES * 60);
-    return {};
-  }
-
-  const headerMap = {};
-  values[0].forEach(function(header, index) {
-    headerMap[normalizeHeader_(header)] = index;
-  });
-
-  const directory = {};
-  for (let i = 1; i < values.length; i++) {
-    const row = values[i];
-    const email = normalizeEmail_(row[headerMap.mail]);
-    if (!email) continue;
-    directory[email] = {
-      email: email,
-      status: String(row[headerMap.status] || '').trim().toLowerCase(),
-      company: String(row[headerMap.company] || '').trim(),
-      name: String(row[headerMap.name] || '').trim(),
-      folderIds: normalizeFolderIds_(row[headerMap.folderids]),
-      expireAt: normalizeExpireAt_(row[headerMap.expireat])
-    };
-  }
-
-  scriptCache.put(cacheKey, JSON.stringify(directory), USER_LIST_CACHE_MINUTES * 60);
-  return directory;
-}
-
-function getUserRecord_(email) {
-  const directory = readUserDirectory_();
-  return directory[normalizeEmail_(email)] || null;
-}
-
 function isSessionExpired_(sessionData) {
   if (!sessionData || !sessionData.expireAt) return false;
   const parsed = new Date(sessionData.expireAt);
@@ -326,7 +219,7 @@ function isSessionExpired_(sessionData) {
 
 function assertSessionAccountAllowed_(sessionData) {
   const status = String(sessionData && sessionData.status || '').trim().toLowerCase();
-  if (status !== 'ok') {
+  if (status && status !== 'ok') {
     throw new Error('[ERR-AUTH-007] Account is disabled.');
   }
   if (isSessionExpired_(sessionData)) {
@@ -542,61 +435,6 @@ function _extractFolderId(url) {
   const m3 = u.match(/^([a-zA-Z0-9_-]{25,})$/);
   if (m3) return m3[1];
   return null;
-}
-
-function FORCE_ALL_AUTH_DOWNLOADER() {
-  SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID).getSheetByName(USER_LIST_SHEET_NAME);
-  CacheService.getScriptCache().put('downloader_auth_test', 'ok', 60);
-  DriveApp.getRootFolder().getName();
-  ScriptApp.getOAuthToken();
-  GmailApp.getAliases();
-  Logger.log('Downloader authorization check completed.');
-}
-
-/**
- * Removes used or expired login-ticket rows older than the retention window.
- * Safe to run from a time-driven trigger (every few hours).
- */
-function cleanupLoginTickets() {
-  const RETENTION_HOURS = 24;
-  const cutoffMs = Date.now() - (RETENTION_HOURS * 60 * 60 * 1000);
-  const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) {
-    Logger.log('[cleanupLoginTickets] lock busy, skipping.');
-    return;
-  }
-  try {
-    const ss = SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID);
-    const sheet = ss.getSheetByName(LOGIN_TICKET_SHEET_NAME);
-    if (!sheet || sheet.getLastRow() < 2) return;
-
-    const values = sheet.getDataRange().getValues();
-    const headerMap = {};
-    values[0].forEach(function(header, index) {
-      headerMap[normalizeHeader_(header)] = index;
-    });
-    const expiresAtCol = headerMap.expiresat;
-    const usedCol = headerMap.used;
-    if (expiresAtCol === undefined || usedCol === undefined) return;
-
-    const rowsToDelete = [];
-    for (let i = 1; i < values.length; i++) {
-      const expiresAt = normalizeExpireAt_(values[i][expiresAtCol]);
-      const expiredMs = expiresAt ? new Date(expiresAt).getTime() : 0;
-      const used = String(values[i][usedCol] || '').trim().toLowerCase() === 'true';
-      if (used || (expiredMs && expiredMs < cutoffMs)) {
-        rowsToDelete.push(i + 1);
-      }
-    }
-
-    rowsToDelete.sort(function(a, b) { return b - a; });
-    rowsToDelete.forEach(function(row) { sheet.deleteRow(row); });
-    Logger.log('[cleanupLoginTickets] removed ' + rowsToDelete.length + ' row(s).');
-  } catch (err) {
-    Logger.log('[cleanupLoginTickets] error: ' + (err && err.message ? err.message : err));
-  } finally {
-    try { lock.releaseLock(); } catch (_) {}
-  }
 }
 
 /* --- 4. ????Session嚗圾??PKL + ASSETMAP嚗?憛翰??manifest嚗?-- */

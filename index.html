@@ -407,7 +407,9 @@
 // == Global State
 // ============================================================
 let driveFiles    = [];       // [{ id, name, size, path }]
-let folderName    = '';       // DCP root folder name
+let folderName    = '';       // Scan root folder name
+let dcpRootPath   = '';       // Relative DCP root path under scan root
+let dcpFolderName = '';       // Actual DCP folder name for display/report
 let destDirHandle = null;     // FileSystemDirectoryHandle (local destination)
 let downloadedFileHandles = new Map(); // 'FolderName/path' ??FileSystemFileHandle
 let localFileMap  = new Map(); // 'FolderName/path' ??File (for DCP check)
@@ -485,6 +487,57 @@ function formatPublicError(prefix, err) {
   const code = getErrorCode(err);
   const text = ERROR_MESSAGES[code] || ERROR_MESSAGES['ERR-UNEXPECTED'];
   return prefix + ': ' + text + ' [' + code + ']';
+}
+
+function normalizeRelativePath(path) {
+  return String(path || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+}
+
+function joinPathParts() {
+  return Array.from(arguments)
+    .map(normalizeRelativePath)
+    .filter(Boolean)
+    .join('/');
+}
+
+function getPathDirname(path) {
+  const normalized = normalizeRelativePath(path);
+  if (!normalized) return '';
+  const parts = normalized.split('/');
+  parts.pop();
+  return parts.join('/');
+}
+
+function getPathBasename(path) {
+  const normalized = normalizeRelativePath(path);
+  if (!normalized) return '';
+  const parts = normalized.split('/');
+  return parts[parts.length - 1] || '';
+}
+
+function detectDcpRoot(files, scanRootFolderName) {
+  const assetmapRoots = new Set();
+  const pklRoots = new Set();
+  const pklNameRegex = /^((pkl|PKL)_[a-f0-9-]{36}|.*\.pkl)\.xml$/;
+
+  for (const file of files || []) {
+    const filePath = normalizeRelativePath(file && file.path);
+    const baseName = getPathBasename(filePath);
+    const dirName = getPathDirname(filePath);
+    if (baseName === 'ASSETMAP' || baseName === 'ASSETMAP.xml') {
+      assetmapRoots.add(dirName);
+    }
+    if (pklNameRegex.test(baseName)) {
+      pklRoots.add(dirName);
+    }
+  }
+
+  const sharedRoots = Array.from(assetmapRoots).filter(root => pklRoots.has(root));
+  const chosenRoot = sharedRoots[0] || Array.from(assetmapRoots)[0] || Array.from(pklRoots)[0] || '';
+  return {
+    rootPath: chosenRoot,
+    folderName: chosenRoot ? getPathBasename(chosenRoot) : scanRootFolderName
+  };
 }
 
 function callJsonp(action, params = {}) {
@@ -659,13 +712,16 @@ async function doScan() {
     const result = await callBackend('getDriveFolderContents', url);
     driveFiles = result.files;
     folderName = result.folderName;
+    const detectedDcp = detectDcpRoot(driveFiles, folderName);
+    dcpRootPath = detectedDcp.rootPath;
+    dcpFolderName = detectedDcp.folderName || folderName;
 
     if (result.truncated) {
       setStatus('Warning: Folder is very large. Only ' + result.fileCount +
                 ' files listed before timeout. Some files may be missing.', 'warning');
     } else {
       setStatus('Found ' + result.fileCount + ' files (' + fmtBytes(result.totalSize) +
-                ') in "' + folderName + '". Select destination and start download.', 'success');
+                ') in "' + folderName + '". Ready to download "' + dcpFolderName + '".', 'success');
     }
 
     renderFolderInfo(result);
@@ -969,14 +1025,14 @@ async function runVerify() {
   overallStatus = 'OK';
   const reportRows = [];
 
-  async function finishVerifyAndSendReport() {
-    finalizeCheck();
-    const payload = {
-      folderName,
-      overallStatus,
-      checkedAt: new Date().toISOString(),
-      rows: reportRows
-    };
+    async function finishVerifyAndSendReport() {
+      finalizeCheck();
+      const payload = {
+      folderName: dcpFolderName || folderName,
+        overallStatus,
+        checkedAt: new Date().toISOString(),
+        rows: reportRows
+      };
 
     try {
       await sendReportEmail(payload);
@@ -995,13 +1051,15 @@ async function runVerify() {
     try { localFileMap.set(key, await fh.getFile()); } catch(_) {}
   }
 
+  const dcpRootKey = joinPathParts(folderName, dcpRootPath);
+
   // Find ASSETMAP and PKL ??same logic as FSDcheck
   const pklRegex = new RegExp(
-    '^' + folderName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
+    '^' + dcpRootKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') +
     '\\/((pkl|PKL)_[a-f0-9\\-]{36}|.*\\.pkl)\\.xml$'
   );
-  const assetmapFile = localFileMap.get(folderName + '/ASSETMAP') ||
-                       localFileMap.get(folderName + '/ASSETMAP.xml');
+  const assetmapFile = localFileMap.get(dcpRootKey + '/ASSETMAP') ||
+                       localFileMap.get(dcpRootKey + '/ASSETMAP.xml');
   let pklFile = null;
   for (const path of localFileMap.keys()) {
     if (pklRegex.test(path)) { pklFile = localFileMap.get(path); break; }
@@ -1086,7 +1144,7 @@ async function runVerify() {
     }
 
     const normalizedPath = asset.path.replace(/\\/g, '/');
-    const fullKey        = folderName + '/' + normalizedPath;
+    const fullKey        = dcpRootKey + '/' + normalizedPath;
     const assetFile      = localFileMap.get(fullKey);
 
     if (!assetFile) {

@@ -429,7 +429,7 @@ const fmtSpeed = s => s >= 1e6 ? (s/1e6).toFixed(1)+' MB/s' : (s/1e3).toFixed(0)
 const sleep    = ms => new Promise(r => setTimeout(r, ms));
 const GAS_API_URL_DEFAULT = 'https://script.google.com/macros/s/AKfycbyd2_QrZZBmXcFHTUMuKODN3locg7CVZraaM8s-_z2HP8sIfePkhQ7e_Z2HRmnd0_4B/exec';
 const GAS_API_URL = new URLSearchParams(window.location.search).get('gasApi') || GAS_API_URL_DEFAULT;
-const PORTAL_SESSION = new URLSearchParams(window.location.search).get('portalSession') || new URLSearchParams(window.location.search).get('token') || '';
+const LOGIN_TICKET = new URLSearchParams(window.location.search).get('loginTicket') || '';
 let apiSession = '';
 let signedInEmail = '';
 const ERROR_MESSAGES = {
@@ -601,8 +601,8 @@ function callBackend(fn, ...args) {
   if (fn === 'getDriveFolderContents') {
     return callJsonp('getDriveFolderContents', { folderUrl: args[0] || '' });
   }
-  if (fn === 'exchangePortalToken') {
-    return callJsonp('exchangePortalToken', { token: args[0] || '' });
+  if (fn === 'exchangeLoginTicket') {
+    return callJsonp('exchangeLoginTicket', { ticket: args[0] || '' });
   }
 
   return Promise.reject(new Error('Unsupported backend function: ' + fn));
@@ -662,15 +662,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (!isGASBridgeAvailable()) {
     // GitHub/static mode: require secure portal token exchange first
-    if (!PORTAL_SESSION) {
+    if (!LOGIN_TICKET) {
       $('scanBtn').disabled = true;
       $('startDownloadBtn').disabled = true;
       setStatus('Access denied. Please enter from the login portal link. [ERR-AUTH-001]', 'error');
       return;
     }
     $('scanBtn').disabled = true;
-    setStatus('Validating portal session...');
-    callBackend('exchangePortalToken', PORTAL_SESSION)
+    setStatus('Validating sign-in session...');
+    callBackend('exchangeLoginTicket', LOGIN_TICKET)
       .then(res => {
         apiSession = res.apiSession || '';
         signedInEmail = res.email || '';

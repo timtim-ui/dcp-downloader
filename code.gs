@@ -8,7 +8,10 @@ const ADMIN_EMAIL      = 'timtim@fullshineff.com.tw';
 const DCP_PORTAL_EMAIL = 'dcp-portal@fullshineff.com.tw';
 const DCP_PORTAL_NAME  = 'Full Shine DCP Portal';
 const API_SESSION_TTL_SECONDS = 43200;
-const PORTAL_SIGNING_SECRET = 'FS_DCP_PORTAL_V1_20260428_9f4bcf7ab1b34e4ba9898c8fdbe55f3d';
+const USER_DIRECTORY_SPREADSHEET_ID = '1Ah2996MNmAxLf6qB1GVXnCZRuERHNugB9pjDasJJGNw';
+const USER_LIST_SHEET_NAME = 'UserList';
+const LOGIN_TICKET_SHEET_NAME = 'LoginTickets';
+const USER_LIST_CACHE_MINUTES = 10;
 
 /* --- 1. ??? --- */
 function doGet(e) {
@@ -43,8 +46,8 @@ function handleApiGet_(e, action) {
     const params = (e && e.parameter) ? e.parameter : {};
     let data;
     switch (action) {
-      case 'exchangePortalToken':
-        data = exchangePortalToken_((params && params.token) || '');
+      case 'exchangeLoginTicket':
+        data = exchangeLoginTicket_((params && params.ticket) || '');
         break;
       case 'getOAuthToken':
         getRequiredApiSession_(params);
@@ -91,18 +94,19 @@ function createApiResponse_(payload, callback) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function exchangePortalToken_(portalToken) {
-  const token = String(portalToken || '').trim();
-  if (!token) throw new Error('[ERR-AUTH-001] Sign-in token is missing.');
-  const portalResult = validatePortalToken_(token);
-  if (!portalResult || portalResult.valid !== true) {
-    throw new Error('[ERR-AUTH-002] Sign-in token is invalid.');
+function exchangeLoginTicket_(loginTicket) {
+  const ticket = String(loginTicket || '').trim();
+  if (!ticket) throw new Error('[ERR-AUTH-001] Sign-in ticket is missing.');
+  const ticketResult = consumeLoginTicket_(ticket);
+  if (!ticketResult || ticketResult.valid !== true) {
+    throw new Error('[ERR-AUTH-002] Sign-in ticket is invalid.');
   }
-  const email = String(portalResult.email || '').trim();
+  const email = normalizeEmail_(ticketResult.email);
   if (!isValidEmail_(email)) {
     throw new Error('[ERR-AUTH-003] Signed-in user is invalid.');
   }
-  const sessionProfile = buildSessionProfile_(portalResult);
+  const user = getUserRecord_(email);
+  const sessionProfile = buildSessionProfileFromUser_(user);
   assertSessionAccountAllowed_(sessionProfile);
   const apiSession = createApiSession_(sessionProfile);
   return {
@@ -114,42 +118,62 @@ function exchangePortalToken_(portalToken) {
   };
 }
 
-function validatePortalToken_(portalToken) {
-  var parts = String(portalToken || '').split('.');
-  if (parts.length !== 2) {
-    return { valid: false, reason: 'Malformed signed token.' };
-  }
-  var payloadB64 = parts[0];
-  var sigB64 = parts[1];
-  var expectedSig = signPortalPayload_(payloadB64);
-  if (sigB64 !== expectedSig) {
-    return { valid: false, reason: 'Signature mismatch.' };
-  }
+function consumeLoginTicket_(ticket) {
+  const normalizedTicket = String(ticket || '').trim();
+  if (!normalizedTicket) return { valid: false, reason: 'Missing ticket.' };
 
-  var jsonText;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
   try {
-    jsonText = Utilities.newBlob(Utilities.base64DecodeWebSafe(payloadB64)).getDataAsString();
-  } catch (_) {
-    return { valid: false, reason: 'Payload decode failed.' };
-  }
+    const ss = SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID);
+    const sheet = ss.getSheetByName(LOGIN_TICKET_SHEET_NAME);
+    if (!sheet || sheet.getLastRow() < 2) {
+      return { valid: false, reason: 'Ticket store empty.' };
+    }
 
-  var data;
-  try {
-    data = JSON.parse(jsonText);
-  } catch (_) {
-    return { valid: false, reason: 'Payload parse failed.' };
-  }
+    const values = sheet.getDataRange().getValues();
+    const headerMap = {};
+    values[0].forEach(function(header, index) {
+      headerMap[normalizeHeader_(header)] = index;
+    });
 
-  var now = Date.now();
-  if (!data || !data.email || !data.exp || now > Number(data.exp)) {
-    return { valid: false, reason: 'Signed token expired.' };
-  }
-  return Object.assign({ valid: true }, data);
-}
+    const ticketCol = headerMap.ticket;
+    const emailCol = headerMap.email;
+    const expiresAtCol = headerMap.expiresat;
+    const usedCol = headerMap.used;
+    const usedAtCol = headerMap.usedat;
+    if ([ticketCol, emailCol, expiresAtCol, usedCol, usedAtCol].some(function(v) { return v === undefined; })) {
+      return { valid: false, reason: 'Ticket store misconfigured.' };
+    }
 
-function signPortalPayload_(payloadB64) {
-  var sigBytes = Utilities.computeHmacSha256Signature(payloadB64, PORTAL_SIGNING_SECRET, Utilities.Charset.UTF_8);
-  return Utilities.base64EncodeWebSafe(sigBytes).replace(/=+$/g, '');
+    const finder = sheet.getRange(2, ticketCol + 1, sheet.getLastRow() - 1, 1)
+      .createTextFinder(normalizedTicket)
+      .matchEntireCell(true)
+      .findNext();
+    if (!finder) {
+      return { valid: false, reason: 'Ticket not found.' };
+    }
+
+    const rowIndex = finder.getRow();
+    const rowValues = sheet.getRange(rowIndex, 1, 1, sheet.getLastColumn()).getValues()[0];
+    const expiresAt = normalizeExpireAt_(rowValues[expiresAtCol]);
+    const used = String(rowValues[usedCol] || '').trim().toLowerCase() === 'true';
+    if (used) {
+      return { valid: false, reason: 'Ticket already used.' };
+    }
+    if (!expiresAt || Date.now() > new Date(expiresAt).getTime()) {
+      return { valid: false, reason: 'Ticket expired.' };
+    }
+
+    const usedAtValue = Utilities.formatDate(new Date(), 'GMT+8', "yyyy-MM-dd'T'HH:mm:ssXXX");
+    sheet.getRange(rowIndex, usedCol + 1, 1, 2).setValues([['true', usedAtValue]]);
+    return {
+      valid: true,
+      email: normalizeEmail_(rowValues[emailCol])
+    };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function createApiSession_(sessionProfile) {
@@ -162,7 +186,7 @@ function createApiSession_(sessionProfile) {
 function getRequiredApiSession_(params) {
   const p = params || {};
   const apiSession = String((p.apiSession || '')).trim();
-  if (!apiSession) throw new Error('Missing apiSession.');
+  if (!apiSession) throw new Error('[ERR-AUTH-004] Session expired or invalid.');
   const raw = CacheService.getScriptCache().get('api_session_' + apiSession);
   if (!raw) throw new Error('[ERR-AUTH-004] Session expired or invalid.');
   let data;
@@ -180,15 +204,29 @@ function getRequiredApiSession_(params) {
   return data;
 }
 
-function buildSessionProfile_(portalResult) {
+function buildSessionProfileFromUser_(user) {
+  if (!user || !isValidEmail_(user.email)) {
+    throw new Error('[ERR-AUTH-003] Signed-in user is invalid.');
+  }
   return {
-    email: String(portalResult.email || '').trim().toLowerCase(),
-    status: String(portalResult.status || '').trim().toLowerCase(),
-    folderIds: normalizeFolderIds_(portalResult.folderIds),
-    expireAt: normalizeExpireAt_(portalResult.expireAt),
-    company: String(portalResult.company || '').trim(),
-    name: String(portalResult.name || '').trim()
+    email: normalizeEmail_(user.email),
+    status: String(user.status || '').trim().toLowerCase(),
+    folderIds: normalizeFolderIds_(user.folderIds),
+    expireAt: normalizeExpireAt_(user.expireAt),
+    company: String(user.company || '').trim(),
+    name: String(user.name || '').trim()
   };
+}
+
+function normalizeHeader_(header) {
+  return String(header || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+function normalizeEmail_(email) {
+  return String(email || '').trim().toLowerCase();
 }
 
 function normalizeFolderIds_(value) {
@@ -211,6 +249,51 @@ function normalizeExpireAt_(value) {
   return parsed.toISOString();
 }
 
+function readUserDirectory_() {
+  const scriptCache = CacheService.getScriptCache();
+  const cacheKey = 'authorized_user_directory_v3';
+  const cached = scriptCache.get(cacheKey);
+  if (cached) return JSON.parse(cached);
+
+  const ss = SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID);
+  const sheet = ss.getSheetByName(USER_LIST_SHEET_NAME);
+  if (!sheet) throw new Error('[ERR-AUTH-003] User directory is unavailable.');
+
+  const values = sheet.getDataRange().getValues();
+  if (!values || values.length < 2) {
+    scriptCache.put(cacheKey, JSON.stringify({}), USER_LIST_CACHE_MINUTES * 60);
+    return {};
+  }
+
+  const headerMap = {};
+  values[0].forEach(function(header, index) {
+    headerMap[normalizeHeader_(header)] = index;
+  });
+
+  const directory = {};
+  for (let i = 1; i < values.length; i++) {
+    const row = values[i];
+    const email = normalizeEmail_(row[headerMap.mail]);
+    if (!email) continue;
+    directory[email] = {
+      email: email,
+      status: String(row[headerMap.status] || '').trim().toLowerCase(),
+      company: String(row[headerMap.company] || '').trim(),
+      name: String(row[headerMap.name] || '').trim(),
+      folderIds: normalizeFolderIds_(row[headerMap.folderids]),
+      expireAt: normalizeExpireAt_(row[headerMap.expireat])
+    };
+  }
+
+  scriptCache.put(cacheKey, JSON.stringify(directory), USER_LIST_CACHE_MINUTES * 60);
+  return directory;
+}
+
+function getUserRecord_(email) {
+  const directory = readUserDirectory_();
+  return directory[normalizeEmail_(email)] || null;
+}
+
 function isSessionExpired_(sessionData) {
   if (!sessionData || !sessionData.expireAt) return false;
   const parsed = new Date(sessionData.expireAt);
@@ -219,7 +302,7 @@ function isSessionExpired_(sessionData) {
 
 function assertSessionAccountAllowed_(sessionData) {
   const status = String(sessionData && sessionData.status || '').trim().toLowerCase();
-  if (status && status !== 'ok') {
+  if (status !== 'ok') {
     throw new Error('[ERR-AUTH-007] Account is disabled.');
   }
   if (isSessionExpired_(sessionData)) {

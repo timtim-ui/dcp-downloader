@@ -95,27 +95,34 @@ function createApiResponse_(payload, callback) {
 }
 
 function exchangeLoginTicket_(loginTicket) {
-  const ticket = String(loginTicket || '').trim();
-  if (!ticket) throw new Error('[ERR-AUTH-001] Sign-in ticket is missing.');
-  const ticketResult = consumeLoginTicket_(ticket);
-  if (!ticketResult || ticketResult.valid !== true) {
-    throw new Error('[ERR-AUTH-002] Sign-in ticket is invalid.');
+  try {
+    const ticket = String(loginTicket || '').trim();
+    if (!ticket) throw new Error('[ERR-AUTH-001] Sign-in ticket is missing.');
+    const ticketResult = consumeLoginTicket_(ticket);
+    if (!ticketResult || ticketResult.valid !== true) {
+      throw new Error('[ERR-AUTH-002] Sign-in ticket is invalid.');
+    }
+    const email = normalizeEmail_(ticketResult.email);
+    if (!isValidEmail_(email)) {
+      throw new Error('[ERR-AUTH-003] Signed-in user is invalid.');
+    }
+    const user = getUserRecord_(email);
+    const sessionProfile = buildSessionProfileFromUser_(user);
+    assertSessionAccountAllowed_(sessionProfile);
+    const apiSession = createApiSession_(sessionProfile);
+    return {
+      apiSession: apiSession,
+      email: sessionProfile.email,
+      expiresInSec: API_SESSION_TTL_SECONDS,
+      folderIds: sessionProfile.folderIds,
+      expireAt: sessionProfile.expireAt || ''
+    };
+  } catch (err) {
+    const msg = err && err.message ? String(err.message) : String(err);
+    if (/^\[ERR-/.test(msg)) throw err;
+    Logger.log('[exchangeLoginTicket_] ' + msg);
+    throw new Error('[ERR-AUTH-006] Session verification failed.');
   }
-  const email = normalizeEmail_(ticketResult.email);
-  if (!isValidEmail_(email)) {
-    throw new Error('[ERR-AUTH-003] Signed-in user is invalid.');
-  }
-  const user = getUserRecord_(email);
-  const sessionProfile = buildSessionProfileFromUser_(user);
-  assertSessionAccountAllowed_(sessionProfile);
-  const apiSession = createApiSession_(sessionProfile);
-  return {
-    apiSession: apiSession,
-    email: sessionProfile.email,
-    expiresInSec: API_SESSION_TTL_SECONDS,
-    folderIds: sessionProfile.folderIds,
-    expireAt: sessionProfile.expireAt || ''
-  };
 }
 
 function consumeLoginTicket_(ticket) {
@@ -518,6 +525,15 @@ function _extractFolderId(url) {
   const m3 = u.match(/^([a-zA-Z0-9_-]{25,})$/);
   if (m3) return m3[1];
   return null;
+}
+
+function FORCE_ALL_AUTH_DOWNLOADER() {
+  SpreadsheetApp.openById(USER_DIRECTORY_SPREADSHEET_ID).getSheetByName(USER_LIST_SHEET_NAME);
+  CacheService.getScriptCache().put('downloader_auth_test', 'ok', 60);
+  DriveApp.getRootFolder().getName();
+  ScriptApp.getOAuthToken();
+  GmailApp.getAliases();
+  Logger.log('Downloader authorization check completed.');
 }
 
 /* --- 4. ????Session嚗圾??PKL + ASSETMAP嚗?憛翰??manifest嚗?-- */

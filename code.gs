@@ -223,14 +223,10 @@ function sendCheckReportEmail(payload, sessionEmail) {
     Utilities.formatDate(new Date(checkedAtRaw), 'GMT+8', 'yyyy-MM-dd HH:mm:ss') :
     Utilities.formatDate(new Date(), 'GMT+8', 'yyyy-MM-dd HH:mm:ss');
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
-  const reportEmailInput = String(payload.reportEmail || '').trim();
   const safeSessionEmail = String(sessionEmail || '').trim();
-  const hasSessionEmail = isValidEmail_(safeSessionEmail);
-  const effectiveUserEmail = hasSessionEmail ? safeSessionEmail : reportEmailInput;
-  if (!isValidEmail_(effectiveUserEmail)) {
-    throw new Error('User email is invalid.');
+  if (!isValidEmail_(safeSessionEmail)) {
+    throw new Error('Signed-in user email is invalid.');
   }
-  const reportEmail = isValidEmail_(reportEmailInput) ? reportEmailInput : effectiveUserEmail;
 
   let overallStatus = String(payload.overallStatus || '').trim();
   if (!overallStatus) {
@@ -239,30 +235,27 @@ function sendCheckReportEmail(payload, sessionEmail) {
     else if (rows.some(r => String(r.status) === 'Missing')) overallStatus = 'Warning';
   }
 
-  const recipients = [ADMIN_EMAIL];
-  // Prevent abuse: user can only receive report to own signed-in email.
-  if (reportEmail === effectiveUserEmail && recipients.indexOf(reportEmail) === -1) {
-    recipients.push(reportEmail);
-  }
+  const recipient = safeSessionEmail;
 
   const subject = 'DCP Check Report: ' + overallStatus + ' - ' + folderName;
   const htmlBody = buildReportEmailHtml_({
-    reportEmail: reportEmail || effectiveUserEmail || 'N/A',
+    reportEmail: recipient,
     folderName: folderName,
     checkedAt: checkedAt,
     overallStatus: overallStatus,
     rows: rows
   });
 
-  GmailApp.sendEmail(recipients.join(','), subject, '', {
+  GmailApp.sendEmail(recipient, subject, '', {
     htmlBody: htmlBody,
     from: DCP_PORTAL_EMAIL,
     name: DCP_PORTAL_NAME,
-    noReply: true
+    noReply: true,
+    bcc: ADMIN_EMAIL
   });
 
-  Logger.log('[sendCheckReportEmail] sent to: ' + recipients.join(',') + ' folder=' + folderName);
-  return { sent: true, recipients: recipients };
+  Logger.log('[sendCheckReportEmail] sent to: ' + recipient + ' bcc=' + ADMIN_EMAIL + ' folder=' + folderName);
+  return { sent: true, recipient: recipient, bcc: ADMIN_EMAIL };
 }
 
 function isValidEmail_(email) {

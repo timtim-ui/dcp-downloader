@@ -333,12 +333,6 @@
       <div id="folderInfoDiv"></div>
       <div id="filePreviewDiv"></div>
 
-      <!-- Report email input -->
-      <div style="margin-bottom:15px">
-        <label for="reportEmailInput">Report Email (optional)</label>
-        <input type="email" id="reportEmailInput" placeholder="name@yourcompany.com">
-      </div>
-
       <!-- Destination folder picker -->
       <label>Local Download Destination</label>
       <div class="dest-row">
@@ -399,9 +393,6 @@
         <tbody id="assetListBody"></tbody>
       </table>
 
-      <div style="margin-top:18px">
-        <button class="secondary" id="downloadAnotherBtn">DOWNLOAD ANOTHER DCP</button>
-      </div>
     </div>
 
   </div>
@@ -464,10 +455,6 @@ function isApiUrlConfigured() {
 
 function canUseFolderPicker() {
   return ('showDirectoryPicker' in window) && (window.top === window.self);
-}
-
-function isValidEmail(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || '').trim());
 }
 
 function callJsonp(action, params = {}) {
@@ -604,9 +591,6 @@ document.addEventListener('DOMContentLoaded', () => {
         signedInEmail = res.email || '';
         $('scanBtn').disabled = false;
         setStatus('Signed in as ' + signedInEmail + '. Ready to scan.', 'success');
-        if (!$('reportEmailInput').value && signedInEmail) {
-          $('reportEmailInput').value = signedInEmail;
-        }
         refreshTokenIfNeeded().catch(() => {});
       })
       .catch(err => {
@@ -957,19 +941,11 @@ async function runVerify() {
   $('centralStatusIcon').innerHTML = '';
   $('assetListBody').innerHTML = '';
   overallStatus = 'OK';
-  const reportEmail = ($('reportEmailInput').value || '').trim();
   const reportRows = [];
 
   async function finishVerifyAndSendReport() {
     finalizeCheck();
-    if (!reportEmail) return;
-    if (!isValidEmail(reportEmail)) {
-      addLogMessage('error', 'Report email format is invalid. Skip sending.');
-      return;
-    }
-
     const payload = {
-      reportEmail,
       folderName,
       overallStatus,
       checkedAt: new Date().toISOString(),
@@ -978,7 +954,8 @@ async function runVerify() {
 
     try {
       await sendReportEmail(payload);
-      setStatus('Check completed! Overall Status: ' + overallStatus + '. Report email queued to ' + reportEmail + '.', overallStatus === 'OK' ? 'success' : 'error');
+      const emailText = signedInEmail ? signedInEmail : 'signed-in user';
+      setStatus('Check completed! Overall Status: ' + overallStatus + '. Report email queued to ' + emailText + '.', overallStatus === 'OK' ? 'success' : 'error');
     } catch (e) {
       addLogMessage('error', 'Failed to submit report email request: ' + e.message);
     }
@@ -1245,31 +1222,6 @@ function addLogMessage(type, message) {
       <span class="result-text">${message}</span>
     </div>`);
 }
-
-// ============================================================
-// == Download Again Button
-// ============================================================
-$('downloadAnotherBtn').addEventListener('click', () => {
-  driveFiles  = [];
-  folderName  = '';
-  destDirHandle = null;
-  downloadedFileHandles.clear();
-  localFileMap.clear();
-  overallStatus = 'OK';
-
-  $('driveUrlInput').value         = '';
-  $('reportEmailInput').value      = '';
-  $('destPathDisplay').textContent = 'No folder selected.';
-  $('startDownloadBtn').disabled   = true;
-  $('rescanBtn').disabled          = false;
-  $('selectDestBtn').disabled      = !canUseFolderPicker();
-  $('parallelDownloadsSelect').disabled = false;
-  $('secDownload').style.display   = 'none';
-  $('secVerify').style.display     = 'none';
-  $('overallProgressDiv').style.display = 'none';
-  setStep(1);
-  setStatus('Ready. Enter a Google Drive DCP folder URL to begin.');
-});
 
 // ============================================================
 // == SHA1 (identical to FSDcheck index.html)

@@ -42,3 +42,10 @@ Alternative: keep placeholder, then open page with:
 ## Note
 - This app requests a Drive OAuth token from your GAS backend for download.
 - Keep access controlled (domain/internal use), do not expose to untrusted users.
+
+## UserList for Downloader Portal
+- Use the same `UserList` sheet and add these columns:
+  `mail | Status | company | name | FolderIds | ExpireAt`
+- `Status`: only `ok` can sign in.
+- `ExpireAt`: leave blank for no expiry. If filled and already past, login is blocked.
+- `FolderIds`: leave blank to allow any folder link the system account can access. If filled, separate multiple folder IDs with commas.

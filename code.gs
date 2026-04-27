@@ -8,7 +8,7 @@ const ADMIN_EMAIL      = 'timtim@fullshineff.com.tw';
 const DCP_PORTAL_EMAIL = 'dcp-portal@fullshineff.com.tw';
 const DCP_PORTAL_NAME  = 'Full Shine DCP Portal';
 const LOGIN_PORTAL_VALIDATE_URL = 'REPLACE_WITH_LOGIN_PORTAL_EXEC_URL';
-const API_SESSION_TTL_SECONDS = 3600;
+const API_SESSION_TTL_SECONDS = 43200;
 
 /* --- 1. ??? --- */
 function doGet(e) {
@@ -51,8 +51,7 @@ function handleApiGet_(e, action) {
         data = getOAuthToken();
         break;
       case 'getDriveFolderContents':
-        getRequiredApiSession_(params);
-        data = getDriveFolderContents((params && params.folderUrl) || '');
+        data = getDriveFolderContentsForSession_((params && params.folderUrl) || '', getRequiredApiSession_(params));
         break;
       case 'ping':
         data = { ok: true, now: new Date().toISOString() };
@@ -93,8 +92,16 @@ function exchangePortalToken_(portalToken) {
   if (!isValidEmail_(email)) {
     throw new Error('Portal returned invalid user email.');
   }
-  const apiSession = createApiSession_(email);
-  return { apiSession: apiSession, email: email, expiresInSec: API_SESSION_TTL_SECONDS };
+  const sessionProfile = buildSessionProfile_(portalResult);
+  assertSessionAccountAllowed_(sessionProfile);
+  const apiSession = createApiSession_(sessionProfile);
+  return {
+    apiSession: apiSession,
+    email: sessionProfile.email,
+    expiresInSec: API_SESSION_TTL_SECONDS,
+    folderIds: sessionProfile.folderIds,
+    expireAt: sessionProfile.expireAt || ''
+  };
 }
 
 function validatePortalToken_(portalToken) {
@@ -121,9 +128,9 @@ function validatePortalToken_(portalToken) {
   return data;
 }
 
-function createApiSession_(email) {
+function createApiSession_(sessionProfile) {
   const sessionToken = Utilities.getUuid() + '_' + Utilities.getUuid().replace(/-/g, '');
-  const sessionData = { email: email, createdAt: Date.now() };
+  const sessionData = Object.assign({}, sessionProfile, { createdAt: Date.now() });
   CacheService.getScriptCache().put('api_session_' + sessionToken, JSON.stringify(sessionData), API_SESSION_TTL_SECONDS);
   return sessionToken;
 }
@@ -143,7 +150,66 @@ function getRequiredApiSession_(params) {
   if (!data || !isValidEmail_(data.email)) {
     throw new Error('apiSession email invalid.');
   }
+  assertSessionAccountAllowed_(data);
+  // Sliding session TTL keeps long downloads and verification alive.
+  CacheService.getScriptCache().put('api_session_' + apiSession, JSON.stringify(data), API_SESSION_TTL_SECONDS);
   return data;
+}
+
+function buildSessionProfile_(portalResult) {
+  return {
+    email: String(portalResult.email || '').trim().toLowerCase(),
+    status: String(portalResult.status || '').trim().toLowerCase(),
+    folderIds: normalizeFolderIds_(portalResult.folderIds),
+    expireAt: normalizeExpireAt_(portalResult.expireAt),
+    company: String(portalResult.company || '').trim(),
+    name: String(portalResult.name || '').trim()
+  };
+}
+
+function normalizeFolderIds_(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map(function(item) { return String(item || '').trim(); })
+      .filter(String);
+  }
+  return String(value || '')
+    .split(/[,\n\r;|]/)
+    .map(function(item) { return item.trim(); })
+    .filter(String);
+}
+
+function normalizeExpireAt_(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const parsed = new Date(text);
+  if (isNaN(parsed.getTime())) return '';
+  return parsed.toISOString();
+}
+
+function isSessionExpired_(sessionData) {
+  if (!sessionData || !sessionData.expireAt) return false;
+  const parsed = new Date(sessionData.expireAt);
+  return !isNaN(parsed.getTime()) && Date.now() > parsed.getTime();
+}
+
+function assertSessionAccountAllowed_(sessionData) {
+  const status = String(sessionData && sessionData.status || '').trim().toLowerCase();
+  if (status && status !== 'ok') {
+    throw new Error('This account is disabled.');
+  }
+  if (isSessionExpired_(sessionData)) {
+    throw new Error('This account has expired.');
+  }
+}
+
+function assertSessionCanAccessFolder_(sessionData, folderId) {
+  assertSessionAccountAllowed_(sessionData);
+  const allowList = Array.isArray(sessionData.folderIds) ? sessionData.folderIds : [];
+  if (!allowList.length) return;
+  if (allowList.indexOf(folderId) === -1) {
+    throw new Error('This account is not allowed to access this folder.');
+  }
 }
 
 function sendCheckReportEmail(payload, sessionEmail) {
@@ -328,6 +394,15 @@ function getDriveFolderContents(folderUrl) {
     truncated:  truncated,
     files:      files  // [{ id, name, size, path }]
   };
+}
+
+function getDriveFolderContentsForSession_(folderUrl, sessionData) {
+  const folderId = _extractFolderId(folderUrl);
+  if (!folderId) {
+    throw new Error('Invalid Google Drive folder URL or folder ID.');
+  }
+  assertSessionCanAccessFolder_(sessionData, folderId);
+  return getDriveFolderContents(folderUrl);
 }
 
 function _extractFolderId(url) {
